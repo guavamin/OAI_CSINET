@@ -38,6 +38,7 @@ extern "C" void imscope_autoinit(void *dataptr)
   scope->copyDataUnsafeWithOffset = copyDataUnsafeWithOffset;
   scope->unlockScopeData = unlockScopeData;
   scope->copyData = copyDataThreadSafe;
+  scope->imscope_windows = get_imscope_windows_filter();
   if (IS_SOFTMODEM_GNB) {
     scopeParms_t *scope_params = (scopeParms_t *)dataptr;
     scope_params->gNB->scopeData = scope;

@@ -39,6 +39,7 @@
 #define NRUE_RU_TUNE_OFFSET "tune_offset"
 #define NRUE_RU_IF_FREQUENCY "if_freq"
 #define NRUE_RU_IF_FREQ_OFFSET "if_offset"
+#define NRUE_RU_GPIO_CONTROL "gpio_controller"
 
 #define NRUE_RU_SRC_CHECK                                                                                        \
   &(checkedparam_t)                                                                                              \
@@ -65,6 +66,7 @@
   {NRUE_RU_TUNE_OFFSET,      CONFIG_HLP_TUNE_OFFSET,    0,         .dblptr=NULL, .defdblval=0.0,         TYPE_DOUBLE, 0,      NULL              }, \
   {NRUE_RU_IF_FREQUENCY,     CONFIG_HLP_IF_FREQ,        0,         .u64ptr=NULL, .defint64val=0,         TYPE_UINT64, 0,      NULL              }, \
   {NRUE_RU_IF_FREQ_OFFSET,   CONFIG_HLP_IF_FREQ_OFF,    0,         .iptr=NULL,   .defintval=0,           TYPE_INT,    0,      NULL              }, \
+  {NRUE_RU_GPIO_CONTROL,     "GPIO control: none, generic, interdigital, tdd_frontend", 0, .strptr=NULL, .defstrval="none", TYPE_STRING, 0, NULL }, \
 }
 // clang-format on
 
@@ -230,7 +232,8 @@ void nrue_set_ru_params(configmodule_interface_t *cfg)
                                      .tune_offset = get_softmodem_params()->tune_offset,
                                      .if_frequency = get_nrUE_params()->if_freq,
                                      .if_freq_offset = get_nrUE_params()->if_freq_off,
-                                     .used_by_cell = -1};
+                                     .used_by_cell = -1,
+                                     .gpio_controller = RU_GPIO_CONTROL_NONE};
     return;
   }
 
@@ -261,6 +264,18 @@ void nrue_set_ru_params(configmodule_interface_t *cfg)
     int time_src_idx = config_paramidx_fromname(RUParams, sizeofArray(RUParams), NRUE_RU_TIME_SRC);
     AssertFatal(time_src_idx >= 0, "Index for time_src config option not found!\n");
     nrue_rus[ru_id].time_source = config_get_processedint(cfg, &RUParamList.paramarray[ru_id][time_src_idx]);
+
+    const char *gpio_str = *(gpd(RUParamList.paramarray[ru_id], sizeofArray(RUParams), NRUE_RU_GPIO_CONTROL)->strptr);
+    if (strcmp(gpio_str, "none") == 0)
+      nrue_rus[ru_id].gpio_controller = RU_GPIO_CONTROL_NONE;
+    else if (strcmp(gpio_str, "generic") == 0)
+      nrue_rus[ru_id].gpio_controller = RU_GPIO_CONTROL_GENERIC;
+    else if (strcmp(gpio_str, "interdigital") == 0)
+      nrue_rus[ru_id].gpio_controller = RU_GPIO_CONTROL_INTERDIGITAL;
+    else if (strcmp(gpio_str, "tdd_frontend") == 0)
+      nrue_rus[ru_id].gpio_controller = RU_GPIO_CONTROL_TDD_FRONTEND;
+    else
+      AssertFatal(false, "bad gpio_controller in UE RU config: '%s'\n", gpio_str);
 
     LOG_I(NR_PHY,
           "RU %d: nb_tx %d, nb_rx %d, att_tx %d, att_rx %d, max_rxgain %d, tune_offset %f, if_frequency %lu, if_freq_offset %d, "
@@ -354,6 +369,7 @@ void nrue_init_openair0(void)
     cfg->clock_source = nrue_rus[ru_id].clock_source;
     cfg->time_source = nrue_rus[ru_id].time_source;
     cfg->tune_offset = nrue_rus[ru_id].tune_offset;
+    cfg->gpio_controller = nrue_rus[ru_id].gpio_controller;
   }
 }
 

@@ -115,7 +115,18 @@ typedef struct IQData {
   void Collect(ImScopeData *scope_data, float time, float epsilon) {
     timestamp = time;
     scopeGraphData_t *iq_header = scope_data->scope_graph_data;
+    if (!iq_header) {
+      len = 0;
+      meta = scope_data->meta;
+      scope_id = scope_data->scope_id;
+      return;
+    }
     len = iq_header->lineSz;
+    if (len <= 0) {
+      meta = scope_data->meta;
+      scope_id = scope_data->scope_id;
+      return;
+    }
     real.resize(len);
     imag.resize(len);
     power.resize(len);

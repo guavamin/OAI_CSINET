@@ -31,6 +31,14 @@ void copyDataThreadSafe(void *scopeData,
                         int offset,
                         metadata *meta)
 {
+  if (type < 0 || type >= EXTRA_SCOPE_TYPES) {
+    LOG_W(PHY, "imscope copyData: type %d out of range [0,%d), skip (rebuild imscope?)\n", type, EXTRA_SCOPE_TYPES);
+    return;
+  }
+  if (lineSz <= 0 || elementSz <= 0) {
+    LOG_W(PHY, "imscope copyData: lineSz=%d elementSz=%d, skip\n", lineSz, elementSz);
+    return;
+  }
   ImScopeDataWrapper &scope_data = scope_array[type];
 
   if (scope_data.is_data_ready) {
@@ -180,6 +188,12 @@ const char *scope_id_to_string(scopeDataType type) {
       return "pdschChanEstimates";
     case pdschRxdataF:
       return "pdschRxdataF";
+    case ueCsirsChEstimate:
+      return "ueCsirsChEstimate";
+    case gNBCsiReportParams:
+      return "gNBCsiReportParams";
+    case gNBSrsChEstimate:
+      return "gNBSrsChEstimate";
     default:
       return "unknown scope type";
   }

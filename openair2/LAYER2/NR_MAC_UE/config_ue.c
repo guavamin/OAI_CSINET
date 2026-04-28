@@ -2877,6 +2877,7 @@ void nr_rrc_mac_config_req_cg(module_id_t module_id,
 {
   LOG_I(MAC,"[UE %d] Applying CellGroupConfig from gNodeB\n", module_id);
   NR_UE_MAC_INST_t *mac = get_mac_inst(module_id);
+  AssertFatal(mac != NULL, "[UE %d] get_mac_inst returned NULL - cannot apply CellGroupConfig\n", module_id);
   int ret = pthread_mutex_lock(&mac->if_mutex);
   AssertFatal(!ret, "mutex failed %d\n", ret);
   AssertFatal(cell_group_config, "CellGroupConfig should not be NULL\n");
@@ -2902,9 +2903,9 @@ void nr_rrc_mac_config_req_cg(module_id_t module_id,
   if (cell_group_config->mac_CellGroupConfig)
     configure_maccellgroup(mac, cell_group_config->mac_CellGroupConfig);
 
-  for (int j = 0; j < mac->TAG_list.count; j++) {
+  for (int j = 0; j < mac->TAG_list.count && mac->TAG_list.array != NULL; j++) {
     // apply the Timing Advance Command for the indicated TAG
-    if (mac->TAG_list.array[j]->tag_Id == mac->tag_Id)
+    if (mac->TAG_list.array[j]->tag_Id == mac->tag_Id && mac->current_UL_BWP != NULL)
       configure_timeAlignmentTimer(&mac->time_alignment_timer, mac->TAG_list.array[j]->timeAlignmentTimer, mac->current_UL_BWP->scs);
   }
 

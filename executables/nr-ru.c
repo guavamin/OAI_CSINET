@@ -509,6 +509,10 @@ static radio_tx_gpio_flag_t get_gpio_flags(RU_t *ru, int slot)
       LOG_I(HW, "slot %d, beam %d, flags_gpio %d\n", slot, beam, flags_gpio);
       break;
     }
+    case RU_GPIO_CONTROL_TDD_FRONTEND:
+    case RU_GPIO_CONTROL_NONE:
+      /* TDD front-end: GPIO is ATR-driven in radio (low=RX, high=TX), no per-slot flags */
+      break;
     default:
       AssertFatal(false, "illegal GPIO controller %d\n", cfg0->gpio_controller);
   }
@@ -1326,6 +1330,12 @@ static void NRRCconfig_RU(configmodule_interface_t *cfg)
       } else if (strcmp(str, "interdigital") == 0) {
         ru->openair0_cfg.gpio_controller = RU_GPIO_CONTROL_INTERDIGITAL;
         LOG_I(PHY, "RU GPIO control set as 'interdigital'\n");
+      } else if (strcmp(str, "tdd_frontend") == 0) {
+        ru->openair0_cfg.gpio_controller = RU_GPIO_CONTROL_TDD_FRONTEND;
+        LOG_I(PHY, "RU GPIO control set as 'tdd_frontend' (1 pin: low=RX, high=TX)\n");
+      } else if (strcmp(str, "none") == 0) {
+        ru->openair0_cfg.gpio_controller = RU_GPIO_CONTROL_NONE;
+        LOG_I(PHY, "RU GPIO control set as 'none'\n");
       } else {
         AssertFatal(false, "bad GPIO controller in configuration file: '%s'\n", str);
       }

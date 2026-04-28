@@ -377,6 +377,12 @@ int main(int argc, char **argv)
       cell.used_by_ue = inst;
 
       set_UE_options(CC_id, UE_CC, cell.ru_id);
+      /* Support both UE-specific and common --csi-record-path (gNB option is in common params) */
+      UE_CC->csi_record_path = get_nrUE_params()->csi_record_path
+                               ? get_nrUE_params()->csi_record_path
+                               : get_softmodem_params()->csi_record_path;
+      if (UE_CC->csi_record_path && UE_CC->csi_record_path[0] != '\0')
+        LOG_I(NR_PHY, "CSI recording enabled: %s\n", UE_CC->csi_record_path);
       init_nr_ue_phy_cpu_stats(&UE_CC->phy_cpu_stats);
 
       NR_DL_FRAME_PARMS *fp = nrue_get_cell_fp(cell_id);

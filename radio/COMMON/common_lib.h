@@ -176,6 +176,8 @@ typedef enum {
   RU_GPIO_CONTROL_NONE,
   RU_GPIO_CONTROL_GENERIC,
   RU_GPIO_CONTROL_INTERDIGITAL,
+  /* One GPIO pin: low = RX, high = TX (for external mmWave/LNA/PA TDD switching). */
+  RU_GPIO_CONTROL_TDD_FRONTEND,
 } gpio_control_t;
 
 /*! \brief defines the direction of each symbol. Int values intentional and
@@ -284,6 +286,8 @@ typedef struct openair0_config {
   int txfh_cores[8];
   //! select the GPIO control method
   gpio_control_t gpio_controller;
+  /*! \brief For tdd_frontend: GPIO advance in seconds (0 = ATR, >0 = timed GPIO this many seconds before burst start). Set via device args e.g. gpio_tdd_advance_us=20. */
+  double gpio_tdd_advance_sec;
   //! this interface is reused for split 7, so split 7 options provided below
   split7_config_t split7;
 } openair0_config_t;

@@ -267,6 +267,28 @@ static int sync_to_gps(openair0_device_t *device)
 #define ATR_XX   0x20 //data[5]
 #define MAN_MASK ATR_MASK ^ 0xFFF // manually controlled pins
 
+/* Single GPIO for external TDD front-end (mmWave/LNA/PA): low = RX, high = TX.
+ * If gpio_tdd_advance_sec > 0: manual GPIO + timed commands so GPIO goes high (advance_sec) before burst start.
+ * Else: UHD ATR (GPIO aligned with RF, no guaranteed lead). */
+#define TDD_FRONTEND_GPIO_MASK  1
+static void trx_usrp_start_tdd_frontend_gpio(openair0_device_t *device, usrp_state_t *s)
+{
+  double advance = device->openair0_cfg->gpio_tdd_advance_sec;
+  s->usrp->set_gpio_attr(s->gpio_bank, "DDR", TDD_FRONTEND_GPIO_MASK, TDD_FRONTEND_GPIO_MASK);
+  if (advance > 0) {
+    s->usrp->set_gpio_attr(s->gpio_bank, "CTRL", 0, TDD_FRONTEND_GPIO_MASK);
+    s->usrp->set_gpio_attr(s->gpio_bank, "OUT", 0, TDD_FRONTEND_GPIO_MASK);
+    std::cerr << "-- GPIO TDD front-end: 1 pin (bit0), timed: high " << (advance * 1e6) << " us before burst, low at burst end" << std::endl;
+  } else {
+    s->usrp->set_gpio_attr(s->gpio_bank, "CTRL", TDD_FRONTEND_GPIO_MASK, TDD_FRONTEND_GPIO_MASK);
+    s->usrp->set_gpio_attr(s->gpio_bank, "ATR_0X", 0, TDD_FRONTEND_GPIO_MASK);
+    s->usrp->set_gpio_attr(s->gpio_bank, "ATR_RX", 0, TDD_FRONTEND_GPIO_MASK);
+    s->usrp->set_gpio_attr(s->gpio_bank, "ATR_TX", TDD_FRONTEND_GPIO_MASK, TDD_FRONTEND_GPIO_MASK);
+    s->usrp->set_gpio_attr(s->gpio_bank, "ATR_XX", TDD_FRONTEND_GPIO_MASK, TDD_FRONTEND_GPIO_MASK);
+    std::cerr << "-- GPIO TDD front-end: 1 pin (bit0), ATR: low=RX high=TX" << std::endl;
+  }
+}
+
 static void trx_usrp_start_interdigital_gpio(openair0_device_t *device, usrp_state_t *s)
 {
   AssertFatal(device->type == USRP_X400_DEV,
@@ -323,6 +345,9 @@ static int trx_usrp_start(openair0_device_t *device)
       break;
     case RU_GPIO_CONTROL_INTERDIGITAL:
       trx_usrp_start_interdigital_gpio(device, s);
+      break;
+    case RU_GPIO_CONTROL_TDD_FRONTEND:
+      trx_usrp_start_tdd_frontend_gpio(device, s);
       break;
     default:
       AssertFatal(false, "illegal GPIO controller %d\n", device->openair0_cfg->gpio_controller);
@@ -501,6 +526,22 @@ static int trx_usrp_write(openair0_device_t *device,
       s->tx_md.time_spec = uhd::time_spec_t::from_ticks(timestamp, s->sample_rate);
       s->tx_count++;
 
+      double advance = device->openair0_cfg->gpio_tdd_advance_sec;
+      if (device->openair0_cfg->gpio_controller == RU_GPIO_CONTROL_TDD_FRONTEND && advance > 0) {
+        uhd::time_spec_t burst_start = s->tx_md.time_spec;
+        double burst_duration_sec = nsamps / s->sample_rate;
+        if (first_packet_state) {
+          s->usrp->set_command_time(burst_start - uhd::time_spec_t(advance));
+          s->usrp->set_gpio_attr(s->gpio_bank, "OUT", TDD_FRONTEND_GPIO_MASK, TDD_FRONTEND_GPIO_MASK);
+          s->usrp->clear_command_time();
+        }
+        if (last_packet_state) {
+          s->usrp->set_command_time(burst_start + uhd::time_spec_t(burst_duration_sec));
+          s->usrp->set_gpio_attr(s->gpio_bank, "OUT", 0, TDD_FRONTEND_GPIO_MASK);
+          s->usrp->clear_command_time();
+        }
+      }
+
       VCD_SIGNAL_DUMPER_DUMP_FUNCTION_BY_NAME(VCD_SIGNAL_DUMPER_FUNCTIONS_BEAM_SWITCHING_GPIO, 1);
       // bit 13 enables gpio
       if ((flags_gpio & TX_GPIO_CHANGE) != 0) {
@@ -632,6 +673,22 @@ void *trx_usrp_write_thread(void * arg)
     s->tx_md.time_spec      = uhd::time_spec_t::from_ticks(timestamp, s->sample_rate);
     LOG_D(PHY,"usrp_tx_write: tx_count %llu SoB %d, EoB %d, TS %llu\n",(unsigned long long)s->tx_count,s->tx_md.start_of_burst,s->tx_md.end_of_burst,(unsigned long long)timestamp); 
     s->tx_count++;
+
+    double advance = device->openair0_cfg->gpio_tdd_advance_sec;
+    if (device->openair0_cfg->gpio_controller == RU_GPIO_CONTROL_TDD_FRONTEND && advance > 0) {
+      uhd::time_spec_t burst_start = s->tx_md.time_spec;
+      double burst_duration_sec = nsamps / s->sample_rate;
+      if (first_packet) {
+        s->usrp->set_command_time(burst_start - uhd::time_spec_t(advance));
+        s->usrp->set_gpio_attr(s->gpio_bank, "OUT", TDD_FRONTEND_GPIO_MASK, TDD_FRONTEND_GPIO_MASK);
+        s->usrp->clear_command_time();
+      }
+      if (last_packet) {
+        s->usrp->set_command_time(burst_start + uhd::time_spec_t(burst_duration_sec));
+        s->usrp->set_gpio_attr(s->gpio_bank, "OUT", 0, TDD_FRONTEND_GPIO_MASK);
+        s->usrp->clear_command_time();
+      }
+    }
 
     // bit 3 enables gpio (for backward compatibility)
     if (flags_gpio&0x1000) {
@@ -1099,12 +1156,50 @@ extern "C" {
     LOG_I(HW,"UHD version %s (%d.%d.%d)\n",
           uhd::get_version_string().c_str(),vers,subvers,subsubvers);
     std::string args,tx_subdev,rx_subdev;
+    bool skip_rx_gain_calib = false;
 
     if (openair0_cfg[0].sdr_addrs == NULL) {
       args = "type=b200";
+      openair0_cfg[0].gpio_tdd_advance_sec = 0;
     } else {
       args = openair0_cfg[0].sdr_addrs;
       LOG_I(HW,"Checking for USRP with args %s\n",openair0_cfg[0].sdr_addrs);
+      /* Allow skipping RX gain calibration table via device args (e.g. skip_rx_gain_calib=1).
+       * Remove from args so UHD does not see an unknown key. */
+      const std::string skip_key("skip_rx_gain_calib=1");
+      if (args.find(skip_key) != std::string::npos) {
+        skip_rx_gain_calib = true;
+        for (size_t p = 0; (p = args.find(skip_key, p)) != std::string::npos; ) {
+          if (p > 0 && args[p - 1] == ',')
+            args.erase(p - 1, skip_key.size() + 1);
+          else if (p + skip_key.size() < args.size() && args[p + skip_key.size()] == ',')
+            args.erase(p, skip_key.size() + 1);
+          else
+            args.erase(p, skip_key.size());
+        }
+        LOG_I(HW, "RX gain calibration table disabled (skip_rx_gain_calib=1)\n");
+      }
+      /* Parse gpio_tdd_advance_us=N (microseconds) for tdd_frontend: GPIO goes high this many us before burst start. */
+      const std::string advance_key("gpio_tdd_advance_us=");
+      size_t adv_pos = args.find(advance_key);
+      if (adv_pos != std::string::npos) {
+        size_t num_start = adv_pos + advance_key.size();
+        size_t num_end = args.find_first_of(",", num_start);
+        std::string num_str = (num_end == std::string::npos) ? args.substr(num_start) : args.substr(num_start, num_end - num_start);
+        int advance_us = 0;
+        if (sscanf(num_str.c_str(), "%d", &advance_us) == 1 && advance_us >= 0) {
+          openair0_cfg[0].gpio_tdd_advance_sec = advance_us / 1e6;
+          LOG_I(HW, "GPIO TDD advance %d us (%.6f s)\n", advance_us, openair0_cfg[0].gpio_tdd_advance_sec);
+        }
+        if (adv_pos > 0 && args[adv_pos - 1] == ',')
+          args.erase(adv_pos - 1, (num_end != std::string::npos ? num_end - adv_pos + 2 : args.size() - adv_pos + 1));
+        else if (num_end != std::string::npos)
+          args.erase(adv_pos, num_end - adv_pos + 1);
+        else
+          args.erase(adv_pos, advance_key.size() + num_str.size());
+      } else {
+        openair0_cfg[0].gpio_tdd_advance_sec = 0;
+      }
     }
 
     uhd::device_addrs_t device_adds = uhd::device::find(args);
@@ -1297,7 +1392,15 @@ extern "C" {
       bw_gain_adjust=1;
       std::cerr << "-- Using calibration table: calib_table_b210_38" << std::endl; // Bell Labs info
     }
+  }
 
+  /* If skip_rx_gain_calib=1 was in device args, use empty table (no RX gain offset). */
+  if (skip_rx_gain_calib) {
+    openair0_cfg[0].rx_gain_calib_table = calib_table_none;
+    std::cerr << "-- Using calibration table: calib_table_none (skip_rx_gain_calib)" << std::endl;
+  }
+
+  if (device->type == USRP_B200_DEV) {
     switch ((int)openair0_cfg[0].sample_rate) {
       case 46080000:
         s->usrp->set_master_clock_rate(46.08e6);

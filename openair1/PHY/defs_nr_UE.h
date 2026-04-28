@@ -281,6 +281,7 @@ typedef struct {
   uint64_t if_frequency;
   int if_freq_offset;
   int used_by_cell;
+  gpio_control_t gpio_controller;
 } nrUE_RU_params_t;
 
 typedef struct {
@@ -434,6 +435,9 @@ typedef struct PHY_VARS_NR_UE_s {
 
   /// CSI variables
   nr_csi_info_t *nr_csi_info;
+
+  /// If non-NULL, record CSI-RS channel estimates and CSI reports to this directory for ML (e.g. CSI compression)
+  char *csi_record_path;
 
   // TODO: move this out of phy
   time_stats_t ue_ul_indication_stats;
