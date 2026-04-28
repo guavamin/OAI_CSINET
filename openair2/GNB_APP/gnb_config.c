@@ -1404,6 +1404,23 @@ void RCconfig_nr_macrlc(configmodule_interface_t *cfg)
   config.do_TCI = *GNBParamList.paramarray[0][GNB_DO_TCI_IDX].iptr;
   config.do_CSIRS = *GNBParamList.paramarray[0][GNB_DO_CSIRS_IDX].iptr;
   config.do_SRS = *GNBParamList.paramarray[0][GNB_DO_SRS_IDX].iptr;
+  config.csi_rs_periodicity_slots = *GNBParamList.paramarray[0][GNB_CSI_RS_PERIODICITY_SLOTS_IDX].iptr;
+  config.csi_rs_slot_offset = -1;
+  {
+    paramdef_t p[] = {
+      { "CSI_RS_slot_offset",
+        "NZP-CSI-RS slot offset within the periodicity (0..period-1). -1 = auto (current default).",
+        0,
+        .iptr = &config.csi_rs_slot_offset,
+        .defintval = -1,
+        TYPE_INT,
+        0 }
+    };
+    char aprefix2[MAX_OPTNAME_SIZE * 2 + 8];
+    snprintf(aprefix2, sizeof(aprefix2), "%s.[%d]", GNB_CONFIG_STRING_GNB_LIST, 0);
+    config_get(config_get_if(), p, sizeofArray(p), aprefix2);
+  }
+  config.srs_periodicity_slots = *GNBParamList.paramarray[0][GNB_SRS_PERIODICITY_SLOTS_IDX].iptr;
   config.max_num_rsrp = *GNBParamList.paramarray[0][GNB_LIMIT_RSRP_REPORT_IDX].iptr;
   const char *report_type_s = *GNBParamList.paramarray[0][GNB_CONFIG_REP_IDX].strptr;
   config.report_type = config_get_processedint(cfg, &GNBParamList.paramarray[0][GNB_CONFIG_REP_IDX]);

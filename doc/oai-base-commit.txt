@@ -1,0 +1,4 @@
+582ce818d70aaa905ae7022fdbd04a5abd579d34
+
+# Last known OAI develop commit this tree was based on when doc/NRGNB_CUSTOM_STACK_AND_DEVELOP_SYNC.md was written.
+# Update this file whenever you rebase/merge a new upstream develop and re-test.
