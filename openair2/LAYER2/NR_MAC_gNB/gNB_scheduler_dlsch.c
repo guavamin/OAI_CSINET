@@ -418,6 +418,46 @@ bwp_info_t get_pdsch_bwp_start_size(gNB_MAC_INST *nr_mac, NR_UE_info_t *UE)
   return bwp_info;
 }
 
+static int get_capped_dl_layers(const NR_UE_info_t *UE,
+                                const NR_UE_sched_ctrl_t *sched_ctrl,
+                                const nr_dci_format_t dci_format)
+{
+  const int decoded_layers = get_dl_nrOfLayers(sched_ctrl, dci_format);
+  if (get_softmodem_params()->dl_ri_use_decoded == 1) {
+    if (get_softmodem_params()->print_csi_debug) {
+      LOG_I(NR_MAC,
+            "DL layers policy(decoded): decoded_RI_layers=%d -> scheduled_layers=%d (RNTI %04x)\n",
+            decoded_layers,
+            decoded_layers,
+            UE->rnti);
+    }
+    return decoded_layers;
+  }
+  long max_cfg_layers = UE->sc_info.maxMIMO_Layers_PDSCH ? *UE->sc_info.maxMIMO_Layers_PDSCH : 0;
+  if (max_cfg_layers < 1)
+    max_cfg_layers = decoded_layers;
+  int selected_layers = min(decoded_layers, (int)max_cfg_layers);
+  if (selected_layers < 1)
+    selected_layers = 1;
+  if (get_softmodem_params()->print_csi_debug) {
+    LOG_I(NR_MAC,
+          "DL layers policy(capped): decoded_RI_layers=%d, maxMIMO_Layers_PDSCH=%ld -> scheduled_layers=%d (RNTI %04x)\n",
+          decoded_layers,
+          max_cfg_layers,
+          selected_layers,
+          UE->rnti);
+  }
+  if (selected_layers != decoded_layers)
+    if (get_softmodem_params()->print_csi_debug)
+      LOG_I(NR_MAC,
+            "DL layers capped: decoded_RI_layers=%d, maxMIMO_Layers_PDSCH=%ld -> scheduled_layers=%d (RNTI %04x)\n",
+            decoded_layers,
+            max_cfg_layers,
+            selected_layers,
+            UE->rnti);
+  return selected_layers;
+}
+
 static bool allocate_dl_retransmission(gNB_MAC_INST *nr_mac,
                                        post_process_pdsch_t *pp_pdsch,
                                        int *n_rb_sched,
@@ -434,7 +474,7 @@ static bool allocate_dl_retransmission(gNB_MAC_INST *nr_mac,
   NR_UE_DL_BWP_t *dl_bwp = &UE->current_DL_BWP;
   NR_UE_UL_BWP_t *ul_bwp = &UE->current_UL_BWP;
   NR_sched_pdsch_t new_sched = sched_ctrl->harq_processes[current_harq_pid].sched_pdsch;
-  int layers = get_dl_nrOfLayers(sched_ctrl, dl_bwp->dci_format);
+  int layers = get_capped_dl_layers(UE, sched_ctrl, dl_bwp->dci_format);
   int pm_index = get_pm_index(nr_mac, UE, dl_bwp->dci_format, layers, nr_mac->radio_config.pdsch_AntennaPorts.XP);
 
   // If the RI changed between current rtx and a previous transmission
@@ -662,6 +702,7 @@ static void pf_dl(gNB_MAC_INST *mac,
   UE_iterator(UE_list, UE) {
     NR_UE_sched_ctrl_t *sched_ctrl = &UE->UE_sched_ctrl;
     NR_UE_DL_BWP_t *current_BWP = &UE->current_DL_BWP;
+    ai_fb_runtime_refresh_sched_tuple(mac, sched_ctrl, frame, slot);
 
     if (!nr_mac_ue_is_active(UE))
       continue;
@@ -723,7 +764,7 @@ static void pf_dl(gNB_MAC_INST *mac,
       /* Calculate coeff */
       const NR_bler_options_t *bo = &mac->dl_bler;
       const int max_mcs_table = current_BWP->mcsTableIdx == 1 ? 27 : 28;
-      const int max_mcs = min(sched_ctrl->dl_max_mcs, max_mcs_table);
+      const int max_mcs = min(ai_fb_runtime_get_effective_dl_max_mcs(UE, sched_ctrl), max_mcs_table);
       int selected_mcs;
       if (bo->harq_round_max == 1) {
         int new_mcs = min(bo->max_mcs, max_mcs);
@@ -731,7 +772,7 @@ static void pf_dl(gNB_MAC_INST *mac,
         sched_ctrl->dl_bler_stats.mcs = selected_mcs;
       } else
         selected_mcs = get_mcs_from_bler(bo, stats, &sched_ctrl->dl_bler_stats, max_mcs, frame);
-      int l = get_dl_nrOfLayers(sched_ctrl, current_BWP->dci_format);
+      int l = get_capped_dl_layers(UE, sched_ctrl, current_BWP->dci_format);
       const uint8_t Qm = nr_get_Qm_dl(selected_mcs, current_BWP->mcsTableIdx);
       const uint16_t R = nr_get_code_rate_dl(selected_mcs, current_BWP->mcsTableIdx);
       uint32_t tbs = nr_compute_tbs(Qm,
@@ -768,6 +809,7 @@ static void pf_dl(gNB_MAC_INST *mac,
   while (iterator->UE != NULL) {
 
     NR_UE_sched_ctrl_t *sched_ctrl = &iterator->UE->UE_sched_ctrl;
+    ai_fb_runtime_refresh_sched_tuple(mac, sched_ctrl, frame, slot);
     const uint16_t rnti = iterator->UE->rnti;
 
     NR_UE_DL_BWP_t *dl_bwp = &iterator->UE->current_DL_BWP;
@@ -876,7 +918,7 @@ static void pf_dl(gNB_MAC_INST *mac,
     sched_ctrl->cce_index = CCEIndex;
     fill_pdcch_vrb_map(mac, CC_id, &sched_ctrl->sched_pdcch, CCEIndex, sched_ctrl->aggregation_level, beam.idx);
 
-    int l = get_dl_nrOfLayers(sched_ctrl, dl_bwp->dci_format);
+    int l = get_capped_dl_layers(iterator->UE, sched_ctrl, dl_bwp->dci_format);
     NR_sched_pdsch_t sched_pdsch = {
       // rbSize below
       .rbStart = rbStart,

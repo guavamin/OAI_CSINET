@@ -361,6 +361,21 @@ static void fill_pusch_uci_struct(const NR_PUSCH_Config_t *pusch_Config,
   pusch_config_pdu->pusch_uci.alpha_scaling = onPusch->scaling;
 }
 
+static void cache_legacy_csi_raw_payload(NR_UE_MAC_INST_t *mac,
+                                         frame_t frame,
+                                         slot_t slot,
+                                         const nfapi_nr_ue_csi_payload_t *csi_payload)
+{
+  if (!csi_payload || csi_payload->p1_bits <= 0)
+    return;
+  mac->legacy_csi_raw_valid = true;
+  mac->legacy_csi_p1_bits = (uint8_t)csi_payload->p1_bits;
+  mac->legacy_csi_part1_payload = csi_payload->part1_payload;
+  mac->legacy_csi_frame = frame;
+  mac->legacy_csi_slot = slot;
+  mac->legacy_csi_obs_seq = mac->csi_obs_seq;
+}
+
 // Configuration of Msg3 PDU according to clauses:
 // - 8.3 of 3GPP TS 38.213 version 16.3.0 Release 16
 // - 6.1.2.2 of TS 38.214
@@ -1810,6 +1825,7 @@ static bool schedule_uci_on_pusch(NR_UE_MAC_INST_t *mac,
     NR_PUSCH_Config_t *pusch_Config = mac->current_UL_BWP->pusch_Config;
     NR_PUCCH_Resource_t *csi_pucch = NULL;
     nr_get_csi_measurements(mac, frame_tx, slot_tx, &csi_payload, &csi_pucch, true);
+    cache_legacy_csi_raw_payload(mac, frame_tx, slot_tx, &csi_payload);
     fill_pusch_uci_struct(pusch_Config, &csi_payload, pusch_pdu);
     mux_done = true;
   }
@@ -1844,6 +1860,7 @@ static void nr_ue_pucch_scheduler(NR_UE_MAC_INST_t *mac, frame_t frame, int slot
     if (mac->state == UE_CONNECTED)
       csi_res = nr_get_csi_measurements(mac, frame, slot, &pucch[num_res].csi_payload, &pucch[num_res].pucch_resource, false);
     if (csi_res > 0) {
+      cache_legacy_csi_raw_payload(mac, frame, slot, &pucch[num_res].csi_payload);
       num_res += csi_res;
     }
 
@@ -2430,6 +2447,79 @@ static uint8_t nr_ue_get_sdu(NR_UE_MAC_INST_t *mac,
 
   nr_ue_get_sdu_mac_ce_pre(mac, frame, slot, ulsch_buffer, buflen, LCG_bytes, &mac_ce_info, tx_power, P_CMAX);
 
+  /* Lab-only bundled UL-SCH CE carrying same-observation legacy CSI raw bits + AI latent.
+   * Pack early so lower-priority SDUs do not consume the available grant first. */
+  if (get_softmodem_params()->ai_fb_bundled_ulsch_enable && mac->ai_fb_valid && mac->legacy_csi_raw_valid) {
+    const uint8_t legacy_p1_nbytes = (uint8_t)((mac->legacy_csi_p1_bits + 7) / 8);
+    const int ce_len = NR_AI_BUNDLED_FEEDBACK_BASE_BYTES + (int)legacy_p1_nbytes + NR_AI_CSI_FB_LATENT_BYTES;
+    const int need = (int)sizeof(NR_MAC_SUBHEADER_SHORT) + ce_len;
+    int remain_for_bundle = mac_ce_info.end_for_tailer - mac_ce_info.cur_ptr;
+    const bool same_obs = (mac->ai_fb_obs_seq == mac->legacy_csi_obs_seq);
+    if (!same_obs) {
+      if (get_softmodem_params()->print_csi_debug) {
+        LOG_W(NR_MAC,
+              "[UE %d] [%d.%d] Bundled AI/legacy skipped (obs mismatch): ai_obs_seq=%u legacy_obs_seq=%u ai[%d.%d] legacy[%d.%d]\n",
+              mac->ue_id,
+              frame,
+              slot,
+              (unsigned)mac->ai_fb_obs_seq,
+              (unsigned)mac->legacy_csi_obs_seq,
+              mac->ai_fb_frame,
+              mac->ai_fb_slot,
+              mac->legacy_csi_frame,
+              mac->legacy_csi_slot);
+      }
+    } else if (remain_for_bundle >= need) {
+      *(NR_MAC_SUBHEADER_SHORT *)mac_ce_info.cur_ptr =
+          (NR_MAC_SUBHEADER_SHORT){.R = 0, .F = 0, .LCID = UL_SCH_LCID_AI_BUNDLED_FEEDBACK, .L = ce_len};
+      mac_ce_info.cur_ptr += sizeof(NR_MAC_SUBHEADER_SHORT);
+      uint8_t *ce_ptr = mac_ce_info.cur_ptr;
+      const uint16_t obs_frame = (uint16_t)(mac->ai_fb_frame & 0x3ff);
+      const uint32_t obs_seq = mac->ai_fb_obs_seq;
+      ce_ptr[0] = NR_AI_BUNDLED_FEEDBACK_VERSION;
+      memcpy(&ce_ptr[1], &obs_frame, sizeof(obs_frame));
+      ce_ptr[3] = (uint8_t)mac->ai_fb_slot;
+      memcpy(&ce_ptr[4], &obs_seq, sizeof(obs_seq));
+      ce_ptr[8] = mac->legacy_csi_p1_bits;
+      ce_ptr[9] = legacy_p1_nbytes;
+      memcpy(&ce_ptr[10], &mac->legacy_csi_part1_payload, legacy_p1_nbytes);
+      memcpy(&ce_ptr[10 + legacy_p1_nbytes], mac->ai_fb_payload, NR_AI_CSI_FB_LATENT_BYTES);
+      mac_ce_info.cur_ptr += ce_len;
+      mac_ce_info.num_sdus++;
+      if (get_softmodem_params()->print_csi_debug) {
+        LOG_I(NR_MAC,
+              "[UE %d] [%d.%d] Bundled AI+legacy CE added to UL-SCH (LCID 0x%02x, obs=%u.%u, obs_seq=%u, legacy_p1_bits=%u, legacy_bytes=%u, ce_len=%d)\n",
+              mac->ue_id,
+              frame,
+              slot,
+              UL_SCH_LCID_AI_BUNDLED_FEEDBACK,
+              (unsigned)obs_frame,
+              (unsigned)mac->ai_fb_slot,
+              (unsigned)obs_seq,
+              (unsigned)mac->legacy_csi_p1_bits,
+              (unsigned)legacy_p1_nbytes,
+              ce_len);
+        LOG_I(NR_MAC,
+              "[UE %d] [%d.%d] Bundled AI+legacy obs_seq check (ai_obs_seq=%u, legacy_obs_seq=%u)\n",
+              mac->ue_id,
+              frame,
+              slot,
+              (unsigned)mac->ai_fb_obs_seq,
+              (unsigned)mac->legacy_csi_obs_seq);
+      }
+      mac->ai_fb_valid = false;
+      mac->legacy_csi_raw_valid = false;
+    } else if (get_softmodem_params()->print_csi_debug) {
+      LOG_W(NR_MAC,
+            "[UE %d] [%d.%d] No room for bundled AI+legacy CE in this UL grant (need=%d, remain=%d)\n",
+            mac->ue_id,
+            frame,
+            slot,
+            need,
+            remain_for_bundle);
+    }
+  }
+
   LOG_D(NR_MAC,
         "[UE %d] [%d.%d] process UL transport block with size TBS = %d bytes, number of existing LCids %d \n",
         mac->ue_id,
@@ -2519,6 +2609,39 @@ static uint8_t nr_ue_get_sdu(NR_UE_MAC_INST_t *mac,
            && get_dataavailability_buffers(avail_lcids_count, lcids_bj_pos, mac_ce_info.lcids_data_status));
 
   nr_ue_get_sdu_mac_ce_post(mac, frame, slot, &mac_ce_info, LCG_bytes, BSRsent);
+
+  /* Lab-only custom AI CSI feedback on UL-SCH:
+   * append one fixed-size LCID sub-PDU when enabled and latent is available. */
+  if (!get_softmodem_params()->ai_fb_bundled_ulsch_enable && get_softmodem_params()->ai_fb_ulsch_enable && mac->ai_fb_valid) {
+    const int need = (int)sizeof(NR_MAC_SUBHEADER_SHORT) + NR_AI_CSI_FB_LATENT_BYTES;
+    int remain_for_ai = mac_ce_info.pdu_end - mac_ce_info.cur_ptr;
+    if (remain_for_ai >= need) {
+      *(NR_MAC_SUBHEADER_SHORT *)mac_ce_info.cur_ptr =
+          (NR_MAC_SUBHEADER_SHORT){.R = 0, .F = 0, .LCID = UL_SCH_LCID_AI_FEEDBACK, .L = NR_AI_CSI_FB_LATENT_BYTES};
+      mac_ce_info.cur_ptr += sizeof(NR_MAC_SUBHEADER_SHORT);
+      memcpy(mac_ce_info.cur_ptr, mac->ai_fb_payload, NR_AI_CSI_FB_LATENT_BYTES);
+      mac_ce_info.cur_ptr += NR_AI_CSI_FB_LATENT_BYTES;
+      mac_ce_info.num_sdus++;
+      if (get_softmodem_params()->print_csi_debug) {
+        LOG_I(NR_MAC,
+              "[UE %d] [%d.%d] AI CSI latent added to UL-SCH (LCID 0x%02x, %d bytes)\n",
+              mac->ue_id,
+              frame,
+              slot,
+              UL_SCH_LCID_AI_FEEDBACK,
+              NR_AI_CSI_FB_LATENT_BYTES);
+      }
+      mac->ai_fb_valid = false;
+    } else if (get_softmodem_params()->print_csi_debug) {
+      LOG_W(NR_MAC,
+            "[UE %d] [%d.%d] No room for AI CSI latent in this UL grant (need=%d, remain=%d)\n",
+            mac->ue_id,
+            frame,
+            slot,
+            need,
+            remain_for_ai);
+    }
+  }
 
   // Compute final offset for padding and fill remainder of ULSCH with 0
   int remain = mac_ce_info.pdu_end - mac_ce_info.cur_ptr;

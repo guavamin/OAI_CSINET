@@ -398,10 +398,13 @@ typedef struct {
 #define UL_SCH_LCID_EXTENDED_LCID_1_OCT            0x22
 #define UL_SCH_LCID_CCCH_48_BITS_REDCAP            0x23
 #define UL_SCH_LCID_CCCH_64_BITS_REDCAP            0x24
+#define UL_SCH_LCID_AI_BUNDLED_FEEDBACK            0x2A
 #define UL_SCH_LCID_TRUNCATED_ENHANCED_BFR         0x2B
 #define UL_SCH_LCID_TIMING_ADVANCE_REPORT          0x2C
 #define UL_SCH_LCID_TRUNCATED_SIDELINK_BSR         0x2D
 #define UL_SCH_LCID_SIDELINK_BSR                   0x2E
+/* Lab-only custom AI CSI feedback over UL-SCH (non-3GPP LCID). */
+#define UL_SCH_LCID_AI_FEEDBACK                    0x2F
 #define UL_SCH_LCID_LBT_FAILURE_4_OCT              0x30
 #define UL_SCH_LCID_LBT_FAILURE_1_OCT              0x31
 #define UL_SCH_LCID_BFR                            0x32
@@ -418,6 +421,17 @@ typedef struct {
 #define UL_SCH_LCID_S_BSR                          0x3D
 #define UL_SCH_LCID_L_BSR                          0x3E
 #define UL_SCH_LCID_PADDING                        0x3F
+
+/* Fixed latent payload budget for phase-1 custom AI CSI feedback (6 int8 values). */
+#define NR_AI_CSI_FB_LATENT_BYTES                  6
+#define NR_AI_CSI_FB_LATENT_BITS                   (NR_AI_CSI_FB_LATENT_BYTES * 8)
+
+#define NR_AI_BUNDLED_FEEDBACK_VERSION             1
+/* Variable-size bundled CE payload:
+ * [version:1][obs_frame:2][obs_slot:1][obs_seq:4][legacy_p1_bits:1][legacy_p1_nbytes:1]
+ * [legacy_part1_bytes:legacy_p1_nbytes][ai_latent:6]
+ */
+#define NR_AI_BUNDLED_FEEDBACK_BASE_BYTES          10
 
 #define NR_MAX_NUM_LCGID              8
 

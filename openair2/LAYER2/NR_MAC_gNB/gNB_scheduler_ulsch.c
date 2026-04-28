@@ -35,6 +35,81 @@
 #include "utils.h"
 #include <openair2/UTIL/OPT/opt.h>
 #include "LAYER2/nr_rlc/nr_rlc_oai_api.h"
+#include "openair2/LAYER2/NR_MAC_gNB/ai_fb_decoder.h"
+#include "openair2/LAYER2/NR_MAC_gNB/csinet_decoder.h"
+#include <complex.h>
+#include <math.h>
+
+void nr_extract_csi_report_from_raw_payload(NR_CSI_MeasConfig_t *csi_MeasConfig,
+                                            uint8_t *payload,
+                                            uint16_t bitlen,
+                                            frame_t frame,
+                                            slot_t slot,
+                                            NR_UE_info_t *UE,
+                                            gNB_MAC_INST *nrmac);
+
+static double ai_fb_rank2_subspace_similarity_2p(uint8_t i2, double complex u0, double complex u1)
+{
+  static const double complex W[2][2][2] = {
+      {{1.0 + 0.0 * I, 0.0 + 0.0 * I}, {0.0 + 0.0 * I, 1.0 + 0.0 * I}},
+      {{M_SQRT1_2 + 0.0 * I, M_SQRT1_2 + 0.0 * I}, {M_SQRT1_2 + 0.0 * I, -M_SQRT1_2 + 0.0 * I}},
+  };
+  if (i2 > 1)
+    return -1.0;
+  double metric = 0.0;
+  for (int l = 0; l < 2; l++) {
+    const double complex d = conj(W[i2][0][l]) * u0 + conj(W[i2][1][l]) * u1;
+    metric += creal(d * conj(d));
+  }
+  if (metric < 0.0)
+    metric = 0.0;
+  if (metric > 1.0)
+    metric = 1.0;
+  return sqrt(metric);
+}
+
+static double ai_fb_direction_similarity_2p(uint8_t legacy_ri, uint8_t legacy_pmi_x2, double complex u0, double complex u1)
+{
+  if (legacy_ri == 0) {
+    if (legacy_pmi_x2 > 3)
+      return -1.0;
+    const double phase = (M_PI / 2.0) * (double)legacy_pmi_x2;
+    const double complex w0 = M_SQRT1_2 + 0.0 * I;
+    const double complex w1 = M_SQRT1_2 * cexp(I * phase);
+    const double complex dot = conj(w0) * u0 + conj(w1) * u1;
+    const double sim = cabs(dot);
+    return fmin(1.0, fmax(0.0, sim));
+  }
+  if (legacy_ri == 1) {
+    return ai_fb_rank2_subspace_similarity_2p(legacy_pmi_x2, u0, u1);
+  }
+  return -1.0;
+}
+
+static uint8_t ai_fb_hysteresis_x2(uint8_t raw,
+                                   uint8_t *effective,
+                                   uint8_t *pending,
+                                   uint8_t *pending_count,
+                                   uint8_t threshold)
+{
+  if (raw == *effective) {
+    *pending = raw;
+    *pending_count = 0;
+    return *effective;
+  }
+  if (raw == *pending) {
+    if (*pending_count < 255)
+      (*pending_count)++;
+  } else {
+    *pending = raw;
+    *pending_count = 1;
+  }
+  if (*pending_count >= threshold) {
+    *effective = raw;
+    *pending_count = 0;
+  }
+  return *effective;
+}
 
 //#define SRS_IND_DEBUG
 
@@ -290,6 +365,8 @@ uint8_t decode_ul_mac_sub_pdu_header(uint8_t *pduP, uint8_t *lcid, uint16_t *len
     case UL_SCH_LCID_SRB1:
     case UL_SCH_LCID_SRB2:
     case UL_SCH_LCID_DTCH ...(UL_SCH_LCID_DTCH + 28):
+    case UL_SCH_LCID_AI_FEEDBACK:
+    case UL_SCH_LCID_AI_BUNDLED_FEEDBACK:
     case UL_SCH_LCID_L_TRUNCATED_BSR:
     case UL_SCH_LCID_L_BSR:
       if (pduP[0] & 0x40) { // F = 1
@@ -509,6 +586,440 @@ static int nr_process_mac_pdu(instance_t module_idP,
             sched_ctrl->estimated_ul_buffer = 0;
         }
         T(T_GNB_MAC_LCID_UL, T_INT(UE->rnti), T_INT(frameP), T_INT(slot), T_INT(lcid), T_INT(mac_len * 8));
+        break;
+
+      case UL_SCH_LCID_AI_FEEDBACK:
+        if (!get_softmodem_params()->ai_fb_ulsch_enable)
+          break;
+        if (mac_len != NR_AI_CSI_FB_LATENT_BYTES) {
+          LOG_W(NR_MAC,
+                "RNTI %04x [%d.%d] AI feedback LCID length mismatch: got %d expected %d\n",
+                UE->rnti,
+                frameP,
+                slot,
+                mac_len,
+                NR_AI_CSI_FB_LATENT_BYTES);
+          break;
+        }
+        {
+          const uint8_t *ai = &pduP[mac_subheader_len];
+          const nr_pdsch_AntennaPorts_t *ap = &RC.nrmac[module_idP]->radio_config.pdsch_AntennaPorts;
+          const int n_ports = ap->N1 * ap->N2 * ap->XP;
+          const ai_fb_impl_mode_t impl_mode = (ai_fb_impl_mode_t)get_softmodem_params()->ai_fb_impl_mode;
+          if (n_ports == 2) {
+            if (impl_mode == AI_FB_IMPL_CSINET) {
+              csinet_decode2p_out_t dec2;
+              if (csinet_decode_rank1_2p(ai, &dec2)) {
+                sched_ctrl->ai_fb_seen = true;
+                sched_ctrl->ai_fb_frame = frameP;
+                sched_ctrl->ai_fb_slot = slot;
+                sched_ctrl->custom_pmi_x1 = dec2.report.pmi_x1;
+                sched_ctrl->custom_pmi_x2 = dec2.report.pmi_x2;
+                sched_ctrl->ai_fb_runtime_tuple_valid = true;
+                sched_ctrl->ai_fb_runtime_tuple_fresh = true;
+                sched_ctrl->ai_fb_runtime_ri = dec2.report.ri_rank > 0 ? (dec2.report.ri_rank - 1) : 0;
+                sched_ctrl->ai_fb_runtime_pmi_x1 = dec2.report.pmi_x1;
+                sched_ctrl->ai_fb_runtime_pmi_x2 = dec2.report.pmi_x2;
+                sched_ctrl->ai_fb_runtime_cqi = dec2.report.cqi;
+                sched_ctrl->ai_fb_runtime_frame = frameP;
+                sched_ctrl->ai_fb_runtime_slot = slot;
+                sched_ctrl->ai_fb_custom_decodes++;
+                if (get_softmodem_params()->print_csi_debug) {
+                  LOG_I(NR_MAC,
+                        "CSINet UL-SCH decode (2-port) RNTI %04x %d.%d: latent=[%d,%d,%d,%d,%d,%d] -> custom PMI x1=0x%x x2=0x%x (metric=%.5f)\n",
+                        UE->rnti,
+                        frameP,
+                        slot,
+                        (int8_t)ai[0], (int8_t)ai[1], (int8_t)ai[2], (int8_t)ai[3], (int8_t)ai[4], (int8_t)ai[5],
+                        dec2.report.pmi_x1,
+                        dec2.report.pmi_x2,
+                        dec2.report.metric);
+                }
+              }
+              break;
+            }
+            ai_fb_decode2p_out_t dec2;
+            if (ai_fb_decode_rank1_2p(ai, impl_mode, &dec2)) {
+              sched_ctrl->ai_fb_seen = true;
+              sched_ctrl->ai_fb_frame = frameP;
+              sched_ctrl->ai_fb_slot = slot;
+              sched_ctrl->custom_pmi_x1 = dec2.pmi_x1;
+              sched_ctrl->custom_pmi_x2 = dec2.pmi_x2;
+              sched_ctrl->ai_fb_runtime_tuple_valid = true;
+              sched_ctrl->ai_fb_runtime_tuple_fresh = true;
+              sched_ctrl->ai_fb_runtime_ri = dec2.ri;
+              sched_ctrl->ai_fb_runtime_pmi_x1 = dec2.pmi_x1;
+              sched_ctrl->ai_fb_runtime_pmi_x2 = dec2.pmi_x2;
+              sched_ctrl->ai_fb_runtime_cqi = dec2.cqi;
+              sched_ctrl->ai_fb_runtime_frame = frameP;
+              sched_ctrl->ai_fb_runtime_slot = slot;
+              sched_ctrl->ai_fb_custom_decodes++;
+              if (get_softmodem_params()->print_csi_debug) {
+                LOG_I(NR_MAC,
+                      "AI CSI UL-SCH decode (2-port) RNTI %04x %d.%d: latent=[%d,%d,%d,%d,%d,%d] vhat2=[(%.4f%+.4fj),(%.4f%+.4fj)] -> custom PMI x1=0x0 x2=0x%x (metric=%.5f)\n",
+                      UE->rnti,
+                      frameP,
+                      slot,
+                      (int8_t)ai[0], (int8_t)ai[1], (int8_t)ai[2], (int8_t)ai[3], (int8_t)ai[4], (int8_t)ai[5],
+                      creal(dec2.vhat2[0]), cimag(dec2.vhat2[0]),
+                      creal(dec2.vhat2[1]), cimag(dec2.vhat2[1]),
+                      dec2.pmi_x2,
+                      dec2.best_metric);
+              }
+            }
+          } else {
+            if (impl_mode == AI_FB_IMPL_CSINET) {
+              csinet_decode4p_out_t dec4;
+              if (csinet_decode_rank1_4p(ai, &dec4)) {
+                sched_ctrl->ai_fb_seen = true;
+                sched_ctrl->ai_fb_frame = frameP;
+                sched_ctrl->ai_fb_slot = slot;
+                sched_ctrl->custom_pmi_x1 = dec4.report.pmi_x1;
+                sched_ctrl->custom_pmi_x2 = dec4.report.pmi_x2;
+                sched_ctrl->ai_fb_runtime_tuple_valid = true;
+                sched_ctrl->ai_fb_runtime_tuple_fresh = true;
+                sched_ctrl->ai_fb_runtime_ri = dec4.report.ri_rank > 0 ? (dec4.report.ri_rank - 1) : 0;
+                sched_ctrl->ai_fb_runtime_pmi_x1 = dec4.report.pmi_x1;
+                sched_ctrl->ai_fb_runtime_pmi_x2 = dec4.report.pmi_x2;
+                sched_ctrl->ai_fb_runtime_cqi = dec4.report.cqi;
+                sched_ctrl->ai_fb_runtime_frame = frameP;
+                sched_ctrl->ai_fb_runtime_slot = slot;
+                sched_ctrl->ai_fb_custom_decodes++;
+                if (get_softmodem_params()->print_csi_debug) {
+                  LOG_I(NR_MAC,
+                        "CSINet UL-SCH decode (4-port) RNTI %04x %d.%d: latent=[%d,%d,%d,%d,%d,%d] winner(ll=%d,mm=%d,class=%d,metric=%.5f) custom PMI x1=0x%x x2=0x%x\n",
+                        UE->rnti,
+                        frameP,
+                        slot,
+                        (int8_t)ai[0], (int8_t)ai[1], (int8_t)ai[2], (int8_t)ai[3], (int8_t)ai[4], (int8_t)ai[5],
+                        dec4.best_ll,
+                        dec4.best_mm,
+                        dec4.best_class,
+                        dec4.report.metric,
+                        dec4.report.pmi_x1,
+                        dec4.report.pmi_x2);
+                }
+              }
+              break;
+            }
+            ai_fb_decode4p_out_t dec4;
+            if (ai_fb_decode_rank1_4p(ai, impl_mode, &dec4)) {
+              sched_ctrl->ai_fb_seen = true;
+              sched_ctrl->ai_fb_frame = frameP;
+              sched_ctrl->ai_fb_slot = slot;
+              sched_ctrl->custom_pmi_x1 = dec4.pmi_x1;
+              sched_ctrl->custom_pmi_x2 = dec4.pmi_x2;
+              sched_ctrl->ai_fb_runtime_tuple_valid = true;
+              sched_ctrl->ai_fb_runtime_tuple_fresh = true;
+              sched_ctrl->ai_fb_runtime_ri = dec4.ri;
+              sched_ctrl->ai_fb_runtime_pmi_x1 = dec4.pmi_x1;
+              sched_ctrl->ai_fb_runtime_pmi_x2 = dec4.pmi_x2;
+              sched_ctrl->ai_fb_runtime_cqi = dec4.cqi;
+              sched_ctrl->ai_fb_runtime_frame = frameP;
+              sched_ctrl->ai_fb_runtime_slot = slot;
+              sched_ctrl->ai_fb_custom_decodes++;
+              if (get_softmodem_params()->print_csi_debug) {
+                LOG_I(NR_MAC,
+                      "AI CSI UL-SCH decode (4-port) RNTI %04x %d.%d: latent=[%d,%d,%d,%d,%d,%d] vhat=[(%.4f%+.4fj),(%.4f%+.4fj),(%.4f%+.4fj),(%.4f%+.4fj)] winner(ll=%d,mm=%d,class=%d,metric=%.5f) canonical custom PMI x1=0x%x x2=0x%x\n",
+                      UE->rnti,
+                      frameP,
+                      slot,
+                      (int8_t)ai[0], (int8_t)ai[1], (int8_t)ai[2], (int8_t)ai[3], (int8_t)ai[4], (int8_t)ai[5],
+                      creal(dec4.vhat[0]), cimag(dec4.vhat[0]),
+                      creal(dec4.vhat[1]), cimag(dec4.vhat[1]),
+                      creal(dec4.vhat[2]), cimag(dec4.vhat[2]),
+                      creal(dec4.vhat[3]), cimag(dec4.vhat[3]),
+                      dec4.best_ll,
+                      dec4.best_mm,
+                      dec4.best_class,
+                      dec4.best_metric,
+                      dec4.pmi_x1,
+                      dec4.pmi_x2);
+              }
+            }
+          }
+        }
+        break;
+
+      case UL_SCH_LCID_AI_BUNDLED_FEEDBACK:
+        if (!get_softmodem_params()->ai_fb_bundled_ulsch_enable)
+          break;
+        if (mac_len < NR_AI_BUNDLED_FEEDBACK_BASE_BYTES + NR_AI_CSI_FB_LATENT_BYTES) {
+          LOG_W(NR_MAC,
+                "RNTI %04x [%d.%d] Bundled AI feedback LCID too short: got %d min %d\n",
+                UE->rnti,
+                frameP,
+                slot,
+                mac_len,
+                NR_AI_BUNDLED_FEEDBACK_BASE_BYTES + NR_AI_CSI_FB_LATENT_BYTES);
+          break;
+        }
+        {
+          const uint8_t *ce = &pduP[mac_subheader_len];
+          const uint8_t version = ce[0];
+          uint16_t obs_frame = 0;
+          uint32_t obs_seq = 0;
+          memcpy(&obs_frame, &ce[1], sizeof(obs_frame));
+          const uint8_t obs_slot = ce[3];
+          memcpy(&obs_seq, &ce[4], sizeof(obs_seq));
+          const uint8_t legacy_p1_bits = ce[8];
+          const uint8_t legacy_p1_nbytes = ce[9];
+          const int expected_len = NR_AI_BUNDLED_FEEDBACK_BASE_BYTES + legacy_p1_nbytes + NR_AI_CSI_FB_LATENT_BYTES;
+          if (version != NR_AI_BUNDLED_FEEDBACK_VERSION) {
+            LOG_W(NR_MAC,
+                  "RNTI %04x [%d.%d] Bundled AI feedback unsupported version=%u (expected=%u)\n",
+                  UE->rnti,
+                  frameP,
+                  slot,
+                  (unsigned)version,
+                  (unsigned)NR_AI_BUNDLED_FEEDBACK_VERSION);
+            break;
+          }
+          if (mac_len != expected_len || legacy_p1_nbytes > sizeof(uint64_t)) {
+            LOG_W(NR_MAC,
+                  "RNTI %04x [%d.%d] Bundled AI feedback length mismatch: got=%d expected=%d legacy_bytes=%u\n",
+                  UE->rnti,
+                  frameP,
+                  slot,
+                  mac_len,
+                  expected_len,
+                  (unsigned)legacy_p1_nbytes);
+            break;
+          }
+          const uint8_t *legacy_part1_bytes = &ce[10];
+          const uint8_t *ai_latent = &ce[10 + legacy_p1_nbytes];
+
+          const nr_pdsch_AntennaPorts_t *ap = &RC.nrmac[module_idP]->radio_config.pdsch_AntennaPorts;
+          const int n_ports = ap->N1 * ap->N2 * ap->XP;
+          const ai_fb_impl_mode_t impl_mode = (ai_fb_impl_mode_t)get_softmodem_params()->ai_fb_impl_mode;
+          bool custom_ok = false;
+          uint8_t custom_x1 = 0;
+          uint8_t custom_x2 = 0;
+          uint8_t custom_ri = 0;
+          uint8_t custom_cqi = 0;
+          double custom_metric = 0.0;
+          bool custom_low_energy_fallback = false;
+          bool custom_vhat2_valid = false;
+          double complex custom_vhat2[2] = {0};
+          if (n_ports == 2) {
+            if (impl_mode == AI_FB_IMPL_CSINET) {
+              csinet_decode2p_out_t dec2 = {0};
+              if (csinet_decode_rank1_2p(ai_latent, &dec2)) {
+                custom_ok = true;
+                custom_x1 = dec2.report.pmi_x1;
+                custom_x2 = dec2.report.pmi_x2;
+                custom_metric = dec2.report.metric;
+                custom_vhat2[0] = dec2.vhat2[0];
+                custom_vhat2[1] = dec2.vhat2[1];
+                custom_vhat2_valid = true;
+              }
+            } else {
+              ai_fb_decode2p_out_t dec2 = {0};
+              if (ai_fb_decode_rank1_2p(ai_latent, impl_mode, &dec2)) {
+                custom_ok = true;
+                custom_x1 = dec2.pmi_x1;
+                custom_x2 = dec2.pmi_x2;
+                custom_ri = dec2.ri;
+                custom_cqi = dec2.cqi;
+                custom_metric = dec2.best_metric;
+                custom_low_energy_fallback = dec2.low_energy_fallback;
+                custom_vhat2[0] = dec2.vhat2[0];
+                custom_vhat2[1] = dec2.vhat2[1];
+                custom_vhat2_valid = true;
+              }
+            }
+          } else {
+            if (impl_mode == AI_FB_IMPL_CSINET) {
+              csinet_decode4p_out_t dec4 = {0};
+              if (csinet_decode_rank1_4p(ai_latent, &dec4)) {
+                custom_ok = true;
+                custom_x1 = dec4.report.pmi_x1;
+                custom_x2 = dec4.report.pmi_x2;
+                custom_metric = dec4.report.metric;
+              }
+            } else {
+              ai_fb_decode4p_out_t dec4 = {0};
+              if (ai_fb_decode_rank1_4p(ai_latent, impl_mode, &dec4)) {
+                custom_ok = true;
+                custom_x1 = dec4.pmi_x1;
+                custom_x2 = dec4.pmi_x2;
+                custom_ri = dec4.ri;
+                custom_cqi = dec4.cqi;
+                custom_metric = dec4.best_metric;
+                custom_low_energy_fallback = dec4.low_energy_fallback;
+              }
+            }
+          }
+
+          NR_CSI_MeasConfig_t *csi_MeasConfig = UE->sc_info.csi_MeasConfig;
+          bool legacy_ok = false;
+          uint8_t legacy_bytes[sizeof(uint64_t)] = {0};
+          memcpy(legacy_bytes, legacy_part1_bytes, legacy_p1_nbytes);
+          if (csi_MeasConfig != NULL && legacy_p1_bits > 0) {
+            nr_extract_csi_report_from_raw_payload(csi_MeasConfig,
+                                                   legacy_bytes,
+                                                   legacy_p1_bits,
+                                                   frameP,
+                                                   slot,
+                                                   UE,
+                                                   RC.nrmac[module_idP]);
+            legacy_ok = true;
+          }
+
+          if (legacy_ok && custom_ok) {
+            sched_ctrl->legacy_pmi_x1 = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x1;
+            sched_ctrl->legacy_pmi_x2 = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x2;
+            sched_ctrl->custom_pmi_x1 = custom_x1;
+            sched_ctrl->custom_pmi_x2 = custom_x2;
+            sched_ctrl->ai_fb_runtime_tuple_valid = custom_ok;
+            sched_ctrl->ai_fb_runtime_tuple_fresh = true;
+            sched_ctrl->ai_fb_runtime_ri = custom_ri;
+            sched_ctrl->ai_fb_runtime_pmi_x1 = custom_x1;
+            sched_ctrl->ai_fb_runtime_pmi_x2 = custom_x2;
+            sched_ctrl->ai_fb_runtime_cqi = custom_cqi;
+            sched_ctrl->ai_fb_runtime_frame = frameP;
+            sched_ctrl->ai_fb_runtime_slot = slot;
+            sched_ctrl->ai_fb_runtime_obs_seq = obs_seq;
+            sched_ctrl->ai_fb_bundle_decodes++;
+            const bool match = (sched_ctrl->legacy_pmi_x1 == sched_ctrl->custom_pmi_x1) &&
+                               (sched_ctrl->legacy_pmi_x2 == sched_ctrl->custom_pmi_x2);
+            const uint8_t legacy_ri = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.ri;
+            const uint8_t legacy_cqi = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.wb_cqi_1tb;
+            const bool ri_match = (legacy_ri == custom_ri);
+            const double legacy_score = (double)legacy_cqi;
+            const double dir_sim = (n_ports == 2 && custom_vhat2_valid)
+                                       ? ai_fb_direction_similarity_2p(legacy_ri, sched_ctrl->legacy_pmi_x2, custom_vhat2[0], custom_vhat2[1])
+                                       : -1.0;
+            const bool dir_valid = (dir_sim >= 0.0);
+            const int cfg_hyst = get_softmodem_params()->ai_fb_eff_pmi_hyst;
+            const uint8_t ai_fb_eff_hyst_threshold = (uint8_t)((cfg_hyst < 1) ? 1 : ((cfg_hyst > 255) ? 255 : cfg_hyst));
+            if (!sched_ctrl->ai_fb_eff_pmi_init) {
+              sched_ctrl->ai_fb_eff_legacy_pmi_x2 = sched_ctrl->legacy_pmi_x2;
+              sched_ctrl->ai_fb_eff_custom_pmi_x2 = sched_ctrl->custom_pmi_x2;
+              sched_ctrl->ai_fb_eff_legacy_pending_x2 = sched_ctrl->legacy_pmi_x2;
+              sched_ctrl->ai_fb_eff_custom_pending_x2 = sched_ctrl->custom_pmi_x2;
+              sched_ctrl->ai_fb_eff_legacy_pending_count = 0;
+              sched_ctrl->ai_fb_eff_custom_pending_count = 0;
+              sched_ctrl->ai_fb_eff_pmi_init = true;
+            } else {
+              ai_fb_hysteresis_x2(sched_ctrl->legacy_pmi_x2,
+                                  &sched_ctrl->ai_fb_eff_legacy_pmi_x2,
+                                  &sched_ctrl->ai_fb_eff_legacy_pending_x2,
+                                  &sched_ctrl->ai_fb_eff_legacy_pending_count,
+                                  ai_fb_eff_hyst_threshold);
+              ai_fb_hysteresis_x2(sched_ctrl->custom_pmi_x2,
+                                  &sched_ctrl->ai_fb_eff_custom_pmi_x2,
+                                  &sched_ctrl->ai_fb_eff_custom_pending_x2,
+                                  &sched_ctrl->ai_fb_eff_custom_pending_count,
+                                  ai_fb_eff_hyst_threshold);
+            }
+            const bool eff_match = (sched_ctrl->ai_fb_eff_legacy_pmi_x2 == sched_ctrl->ai_fb_eff_custom_pmi_x2);
+            sched_ctrl->ai_fb_bundle_eff_pmi_samples++;
+            if (eff_match)
+              sched_ctrl->ai_fb_bundle_eff_pmi_matches++;
+
+            const uint32_t wpos = sched_ctrl->ai_fb_roll_pos % NR_AI_FB_ROLLING_WINDOW;
+            sched_ctrl->ai_fb_roll_legacy_score[wpos] = legacy_score;
+            sched_ctrl->ai_fb_roll_custom_metric[wpos] = custom_metric;
+            sched_ctrl->ai_fb_roll_dir_sim[wpos] = dir_valid ? dir_sim : 0.0;
+            sched_ctrl->ai_fb_roll_pmi_match[wpos] = match ? 1 : 0;
+            sched_ctrl->ai_fb_roll_ri_match[wpos] = ri_match ? 1 : 0;
+            sched_ctrl->ai_fb_roll_dir_valid[wpos] = dir_valid ? 1 : 0;
+            sched_ctrl->ai_fb_roll_pos++;
+            if (sched_ctrl->ai_fb_roll_count < NR_AI_FB_ROLLING_WINDOW)
+              sched_ctrl->ai_fb_roll_count++;
+
+            double sx = 0.0, sy = 0.0, sxx = 0.0, syy = 0.0, sxy = 0.0;
+            uint32_t pmi_matches = 0, ri_matches = 0, dir_n = 0;
+            double dir_sum = 0.0;
+            for (uint32_t i = 0; i < sched_ctrl->ai_fb_roll_count; i++) {
+              const double x = sched_ctrl->ai_fb_roll_legacy_score[i];
+              const double y = sched_ctrl->ai_fb_roll_custom_metric[i];
+              sx += x;
+              sy += y;
+              sxx += x * x;
+              syy += y * y;
+              sxy += x * y;
+              pmi_matches += sched_ctrl->ai_fb_roll_pmi_match[i];
+              ri_matches += sched_ctrl->ai_fb_roll_ri_match[i];
+              if (sched_ctrl->ai_fb_roll_dir_valid[i]) {
+                dir_sum += sched_ctrl->ai_fb_roll_dir_sim[i];
+                dir_n++;
+              }
+            }
+            const double n = (double)sched_ctrl->ai_fb_roll_count;
+            const double num = n * sxy - sx * sy;
+            const double den_x = n * sxx - sx * sx;
+            const double den_y = n * syy - sy * sy;
+            const double den = (den_x > 0.0 && den_y > 0.0) ? sqrt(den_x * den_y) : 0.0;
+            const double pearson = (den > 1e-12) ? (num / den) : 0.0;
+            const double pmi_rate = (n > 0.0) ? ((double)pmi_matches / n) : 0.0;
+            const double ri_rate = (n > 0.0) ? ((double)ri_matches / n) : 0.0;
+            const double dir_avg = (dir_n > 0) ? (dir_sum / (double)dir_n) : -1.0;
+            const double dir_deg = (dir_valid ? acos(fmin(1.0, fmax(0.0, dir_sim))) * 180.0 / M_PI : -1.0);
+            sched_ctrl->ai_fb_roll_pmi_matches = pmi_matches;
+            sched_ctrl->ai_fb_roll_ri_matches = ri_matches;
+            sched_ctrl->ai_fb_roll_dir_count = dir_n;
+            sched_ctrl->ai_fb_roll_dir_samples = sched_ctrl->ai_fb_roll_count;
+            if (match)
+              sched_ctrl->ai_fb_bundle_pmi_matches++;
+            if (get_softmodem_params()->print_csi_debug) {
+              LOG_I(NR_MAC,
+                    "Bundled compare RNTI %04x [%d.%d] obs[%u.%u seq=%u] legacy(ri=%u pmi_x1=0x%x pmi_x2=0x%x cqi=%u score=%.3f) custom(ri=%u pmi_x1=0x%x pmi_x2=0x%x cqi=%u metric=%.5f low_energy_fallback=%d) match(raw_pmi=%d ri=%d eff_pmi=%d) eff(raw=%u/%u debounced=%u/%u) eff_x2(legacy=0x%x custom=0x%x) totals(pmi=%u/%u) roll(N=%u pmi=%.2f%% ri=%.2f%% pearson(score,metric)=%.4f dir=%.4f angle=%.2fdeg dir_avg=%.4f dir_n=%u)\n",
+                    UE->rnti,
+                    frameP,
+                    slot,
+                    (unsigned)obs_frame,
+                    (unsigned)obs_slot,
+                    (unsigned)obs_seq,
+                    (unsigned)legacy_ri,
+                    sched_ctrl->legacy_pmi_x1,
+                    sched_ctrl->legacy_pmi_x2,
+                    (unsigned)legacy_cqi,
+                    legacy_score,
+                    (unsigned)custom_ri,
+                    sched_ctrl->custom_pmi_x1,
+                    sched_ctrl->custom_pmi_x2,
+                    (unsigned)custom_cqi,
+                    custom_metric,
+                    custom_low_energy_fallback ? 1 : 0,
+                    match ? 1 : 0,
+                    ri_match ? 1 : 0,
+                    eff_match ? 1 : 0,
+                    sched_ctrl->ai_fb_bundle_pmi_matches,
+                    sched_ctrl->ai_fb_bundle_decodes,
+                    sched_ctrl->ai_fb_bundle_eff_pmi_matches,
+                    sched_ctrl->ai_fb_bundle_eff_pmi_samples,
+                    (unsigned)sched_ctrl->ai_fb_eff_legacy_pmi_x2,
+                    (unsigned)sched_ctrl->ai_fb_eff_custom_pmi_x2,
+                    sched_ctrl->ai_fb_bundle_pmi_matches,
+                    sched_ctrl->ai_fb_bundle_decodes,
+                    sched_ctrl->ai_fb_roll_count,
+                    100.0 * pmi_rate,
+                    100.0 * ri_rate,
+                    pearson,
+                    dir_sim,
+                    dir_deg,
+                    dir_avg,
+                    dir_n);
+            }
+          } else if (get_softmodem_params()->print_csi_debug) {
+            float latent_n2 = 0.0f;
+            for (int i = 0; i < NR_AI_CSI_FB_LATENT_BYTES; i++) {
+              const float v = (float)((int8_t)ai_latent[i]);
+              latent_n2 += v * v;
+            }
+            LOG_W(NR_MAC,
+                  "Bundled PMI compare skipped RNTI %04x [%d.%d]: legacy_ok=%d custom_ok=%d p1_bits=%u latent_l2=%.3f\n",
+                  UE->rnti,
+                  frameP,
+                  slot,
+                  legacy_ok ? 1 : 0,
+                  custom_ok ? 1 : 0,
+                  (unsigned)legacy_p1_bits,
+                  sqrtf(latent_n2));
+          }
+        }
         break;
 
       case UL_SCH_LCID_RECOMMENDED_BITRATE_QUERY:

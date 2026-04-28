@@ -25,6 +25,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(OAI_VERSION 2.4.0)
 
 option(CUDA_ENABLE "Enable CUDA accelerated channel simulation" OFF)
+option(OAI_AI_FB_ONNX "Enable AI feedback ONNX Runtime backend" OFF)
 if(CUDA_ENABLE)
     find_package(CUDA REQUIRED)
     find_package(CUDAToolkit REQUIRED)
@@ -54,6 +55,24 @@ if(CUDA_ENABLE)
     endif()
 
     add_compile_definitions(ENABLE_CUDA)
+endif()
+
+set(ONNXRUNTIME_INCLUDE_DIR "")
+set(ONNXRUNTIME_LIBRARY "")
+if(OAI_AI_FB_ONNX)
+  find_path(ONNXRUNTIME_INCLUDE_DIR onnxruntime_c_api.h
+            HINTS ENV ONNXRUNTIME_ROOT
+            PATH_SUFFIXES include include/onnxruntime)
+  find_library(ONNXRUNTIME_LIBRARY onnxruntime
+               HINTS ENV ONNXRUNTIME_ROOT
+               PATH_SUFFIXES lib lib64)
+  if(NOT ONNXRUNTIME_INCLUDE_DIR OR NOT ONNXRUNTIME_LIBRARY)
+    message(FATAL_ERROR "OAI_AI_FB_ONNX=ON but ONNX Runtime not found. Set ONNXRUNTIME_ROOT or install onnxruntime dev package.")
+  endif()
+  message(STATUS "AI FB ONNX backend enabled")
+  message(STATUS "ONNX Runtime include: ${ONNXRUNTIME_INCLUDE_DIR}")
+  message(STATUS "ONNX Runtime library: ${ONNXRUNTIME_LIBRARY}")
+  add_compile_definitions(OAI_AI_FB_ONNX_ENABLED)
 endif()
 
 #########################################################
@@ -1040,6 +1059,8 @@ set(PHY_SRC_UE
   ${OPENAIR1_DIR}/PHY/NR_UE_TRANSPORT/dci_nr.c
   ${OPENAIR1_DIR}/PHY/NR_UE_TRANSPORT/pucch_nr.c
   ${OPENAIR1_DIR}/PHY/NR_UE_TRANSPORT/csi_rx.c
+  ${OPENAIR1_DIR}/PHY/NR_UE_TRANSPORT/ai_fb_encoder.c
+  ${OPENAIR1_DIR}/PHY/NR_UE_TRANSPORT/csinet_encoder.c
   ${OPENAIR1_DIR}/PHY/NR_TRANSPORT/nr_uci_tools_common.c
   ${OPENAIR1_DIR}/PHY/NR_UE_TRANSPORT/nr_ulsch_ue.c
   ${OPENAIR1_DIR}/PHY/NR_REFSIG/ul_ref_seq_nr.c
@@ -1260,6 +1281,8 @@ set (MAC_NR_SRC
   ${NR_GNB_MAC_DIR}/gNB_scheduler_bch.c
   ${NR_GNB_MAC_DIR}/gNB_scheduler_dlsch.c
   ${NR_GNB_MAC_DIR}/gNB_scheduler_ulsch.c
+  ${NR_GNB_MAC_DIR}/ai_fb_decoder.c
+  ${NR_GNB_MAC_DIR}/csinet_decoder.c
   ${NR_GNB_MAC_DIR}/gNB_scheduler_primitives.c
   ${NR_GNB_MAC_DIR}/gNB_scheduler_phytest.c
   ${NR_GNB_MAC_DIR}/gNB_scheduler_uci.c
@@ -1391,8 +1414,14 @@ add_library(MAC_NR_COMMON
             ${OPENAIR2_DIR}/LAYER2/NR_MAC_COMMON/nr_mac_common.c
             ${OPENAIR2_DIR}/LAYER2/NR_MAC_COMMON/nr_mac_common_tdd.c
             ${OPENAIR2_DIR}/LAYER2/NR_MAC_COMMON/nr_compute_tbs_common.c
+            ${OPENAIR2_DIR}/LAYER2/NR_MAC_COMMON/ai_fb_model_loader.c
+            ${OPENAIR2_DIR}/LAYER2/NR_MAC_COMMON/ai_fb_onnx_adapter.c
 )
 target_link_libraries(MAC_NR_COMMON PRIVATE asn1_nr_rrc_hdrs asn1_lte_rrc_hdrs)
+if(OAI_AI_FB_ONNX)
+  target_include_directories(MAC_NR_COMMON PRIVATE ${ONNXRUNTIME_INCLUDE_DIR})
+  target_link_libraries(MAC_NR_COMMON PRIVATE ${ONNXRUNTIME_LIBRARY})
+endif()
 
 include_directories("${OPENAIR2_DIR}/NR_UE_PHY_INTERFACE")
 include_directories("${OPENAIR2_DIR}/LAYER2")

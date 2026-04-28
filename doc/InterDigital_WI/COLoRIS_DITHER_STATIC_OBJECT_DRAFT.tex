@@ -1,0 +1,208 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage{amsmath,amssymb,bm,geometry}
+\usepackage[hidelinks]{hyperref}
+\geometry{margin=2.2cm}
+\newcommand{\C}{\mathbb{C}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\rx}{\mathrm{rx}}
+\newcommand{\tx}{\mathrm{tx}}
+\newcommand{\tr}{\mathrm{tr}}
+\title{Draft: Communication-Preserving Near-Field RIS Sensing via Phase Dithering}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Motivation and Objective}
+This draft investigates a sensing mode where the RIS keeps its main focusing profile toward a served UE, while applying small phase dithers to extract environment information from CSI variations. The target is static-object detection (and optional localization) with minimal communication degradation.
+
+\paragraph{Core question.}
+Can repeated CSI under communication-preserving RIS micro-dithers provide enough information to detect a static object near the RIS in a near-field regime?
+
+\paragraph{Main contributions.}
+This draft makes six concrete contributions: (i) it introduces a communication-preserving sensing mode where RIS micro-dithers are applied around a UE-serving profile; (ii) it formulates a differential CSI model for static-object detection and optional localization; (iii) it derives a nuisance-aware EFIM/CRB feasibility framework with PEB interpretation; (iv) it presents a GLRT-based detection formulation with ROC-oriented evaluation; (v) it casts dither codebook design under explicit communication constraints such as SINR/BLER degradation limits; and (vi) it defines a practical evaluation protocol covering robustness to non-ideal RIS behavior and calibration drift.
+
+\section{Related Work and Novelty Position}
+Prior RIS codebook and ISAC studies mostly focus on one of the following: (i) communication beam training and link gain maximization, (ii) user localization support, or (iii) dual-purpose sensing/communication codebooks without explicitly preserving a fixed serving beam during sensing.
+
+\paragraph{Representative literature.}
+Recent works include learning-based RIS reflection codebooks for communication-oriented beam management, near-field ISAC codebooks for joint angle-range estimation, and near-field RIS localization studies based on FIM/PEB under practical phase-amplitude constraints.
+
+\paragraph{Gap addressed in this draft.}
+This work targets a different operating point: static-object sensing in near field while maintaining the RIS main profile for a served UE. Sensing is performed through small perturbations around the serving profile and differential CSI analysis.
+
+\paragraph{Novelty dimensions.}
+\begin{itemize}
+\item \textbf{Problem setup:} communication-preserving static-object sensing, not generic beam training.
+\item \textbf{Codebook design:} micro-dither codebooks constrained by communication-quality budgets.
+\item \textbf{Theory:} unified EFIM/CRB (estimation feasibility) and GLRT/ROC (detection capability).
+\item \textbf{Practicality:} explicit robustness analysis under RIS non-idealities and calibration drift.
+\end{itemize}
+
+\section{System and Signal Model}
+Consider fixed BS, UE, and RIS positions over a sensing window. Let $m=0,\ldots,M-1$ index RIS states (with $m=0$ the baseline serving profile), $k=1,\ldots,K$ OFDM subcarriers, and $t=1,\ldots,T$ snapshots.
+
+Let $\bm{\Gamma}_0 \in \C^N$ be the baseline RIS profile focused on UE. Dithered profiles are
+\begin{equation}
+\bm{\Gamma}_m = \bm{\Gamma}_0 \odot e^{j\bm{\delta}_m},
+\end{equation}
+where $\bm{\delta}_m$ is a small phase perturbation vector.
+
+The received CSI sample is modeled as
+\begin{equation}
+y_{m,k,t} = \mu_{m,k}(\bm{\theta}) + n_{m,k,t}, \quad n_{m,k,t}\sim\mathcal{CN}(0,\sigma^2),
+\end{equation}
+with
+\begin{equation}
+\mu_{m,k}(\bm{\theta}) =
+h^{\mathrm{dir}}_k + h^{\mathrm{RIS-UE}}_{m,k}
++ h^{\mathrm{obj}}_{m,k}(\bm{\theta}_o) + h^{\mathrm{nu}}_{m,k}(\bm{\eta}).
+\end{equation}
+Here, $\bm{\theta}_o=[x_o,y_o,z_o,\alpha_o]^T$ are object parameters (position and complex reflectivity), and $\bm{\eta}$ denotes nuisance parameters (residual phase offsets, calibration drift, etc.).
+
+\section{Differential Observation for Robustness}
+To suppress common terms and hardware drifts, use differential CSI relative to baseline:
+\begin{equation}
+\Delta y_{m,k,t}=y_{m,k,t}-y_{0,k,t},\quad m\ge 1.
+\end{equation}
+For static BS/UE/RIS geometry, $\Delta y_{m,k,t}$ enhances object-dependent modulation induced by RIS dithers.
+
+\section{Feasibility via FIM and EFIM}
+Let $\bm{\theta}=[\bm{\theta}_o^T,\bm{\eta}^T]^T$. Under complex Gaussian noise, the Fisher Information Matrix is
+\begin{equation}
+\mathbf{J}(\bm{\theta})=
+\sum_{m,k,t}\frac{2}{\sigma^2}
+\Re\!\left\{
+\left(\frac{\partial \mu_{m,k}}{\partial \bm{\theta}}\right)^H
+\left(\frac{\partial \mu_{m,k}}{\partial \bm{\theta}}\right)
+\right\}.
+\end{equation}
+
+Partition
+\begin{equation}
+\mathbf{J}=
+\begin{bmatrix}
+\mathbf{J}_{oo} & \mathbf{J}_{o\eta}\\
+\mathbf{J}_{\eta o} & \mathbf{J}_{\eta\eta}
+\end{bmatrix}.
+\end{equation}
+The equivalent Fisher matrix for object parameters is
+\begin{equation}
+\mathbf{J}_{\mathrm{eq}}=\mathbf{J}_{oo}-\mathbf{J}_{o\eta}\mathbf{J}_{\eta\eta}^{-1}\mathbf{J}_{\eta o}.
+\end{equation}
+Then CRB is
+\begin{equation}
+\mathrm{cov}(\hat{\bm{\theta}}_o)\succeq \mathbf{J}_{\mathrm{eq}}^{-1}.
+\end{equation}
+If estimating 3D position, the position error bound (PEB) is
+\begin{equation}
+\mathrm{PEB}=\sqrt{\tr\!\left(\left[\mathbf{J}_{\mathrm{eq}}^{-1}\right]_{1:3,1:3}\right)}.
+\end{equation}
+
+\paragraph{Interpretation.}
+This bound quantifies when micro-dithering is informative enough for localization and how much near-field geometry and dither design improve observability.
+
+\subsection{When object localization is identifiable}
+Localization is possible only if the measurement model is sufficiently informative and non-degenerate. In practice, the following conditions should hold:
+\begin{itemize}
+\item \textbf{Sufficient diversity across dithers:} the Jacobian vectors $\partial \mu_{m,k}/\partial \bm{\theta}_o$ should not be collinear across $m$.
+\item \textbf{Frequency diversity:} enough subcarriers $K$ and bandwidth are needed to separate range-sensitive effects.
+\item \textbf{Geometry diversity:} RIS-BS-UE-object geometry should avoid near-symmetric layouts that create ambiguous solutions.
+\item \textbf{Near-field modeling:} spherical-wave path terms must be used when the object is in Fresnel region.
+\item \textbf{Nuisance control:} phase/CFO/calibration drifts must be mitigated (or marginalized through EFIM).
+\end{itemize}
+If these conditions are weak, detection can still be feasible while localization error remains large.
+
+\subsection{How to report CRB results}
+For each candidate setup (SNR, $M$, $K$, RIS size, object distance), report:
+\begin{itemize}
+\item $\lambda_{\min}(\mathbf{J}_{\mathrm{eq}})$ as an observability indicator;
+\item PEB from $\mathbf{J}_{\mathrm{eq}}^{-1}$;
+\item empirical localization RMSE of the estimator;
+\item the ratio RMSE/PEB to quantify estimator efficiency.
+\end{itemize}
+This directly answers whether localization is feasible in each operating region.
+
+\section{Detection Formulation (Primary Task)}
+For static-object presence testing:
+\begin{align}
+\mathcal{H}_0 &: \Delta y_{m,k,t} = w_{m,k,t},\\
+\mathcal{H}_1 &: \Delta y_{m,k,t} = s_{m,k}(\bm{\theta}_o)+w_{m,k,t}.
+\end{align}
+A generalized likelihood ratio test (GLRT) is
+\begin{equation}
+\Lambda(\Delta\mathbf{y})=
+\frac{\max_{\bm{\theta}_o,\bm{\eta},\sigma^2} p(\Delta\mathbf{y}\mid\mathcal{H}_1)}
+{\max_{\bm{\eta},\sigma^2} p(\Delta\mathbf{y}\mid\mathcal{H}_0)}
+\gtrless_{\mathcal{H}_0}^{\mathcal{H}_1}\gamma.
+\end{equation}
+Report ROC curves, AUC, and $P_D$ at fixed $P_{FA}$.
+
+\section{Dither Codebook Design Under Communication Constraint}
+Design dithers to maximize sensing information while preserving UE link:
+\begin{align}
+\max_{\{\bm{\delta}_m\}} \quad & \log\det\!\big(\mathbf{J}_{\mathrm{eq}}(\{\bm{\delta}_m\})\big) \\
+\text{s.t.}\quad
+& \Delta\mathrm{SINR}(\{\bm{\delta}_m\}) \le \epsilon, \\
+& |\delta_{m,n}| \le \delta_{\max},\quad \forall m,n.
+\end{align}
+Alternative criteria include minimizing $\tr(\mathbf{J}_{\mathrm{eq}}^{-1})$ or maximizing deflection coefficient for detection.
+
+\section{Evaluation Plan}
+\begin{itemize}
+\item \textbf{Setup:} fixed BS/UE/RIS, near-field RIS model, static objects at known positions.
+\item \textbf{Data:} collect CSI over $M$ dither states, $K$ subcarriers, $T$ repeats per state.
+\item \textbf{Tasks:} object detection; optional coarse object localization.
+\item \textbf{Metrics:} ROC/AUC/$P_D$, localization RMSE vs CRB/PEB, SINR/BLER/throughput impact, sensing overhead.
+\item \textbf{Robustness:} cross-session and calibration-drift tests.
+\end{itemize}
+
+\subsection{Simulation checklist for localization feasibility}
+\begin{enumerate}
+\item \textbf{Baseline run:} no-object and object-present datasets with fixed geometry.
+\item \textbf{SNR sweep:} at least 4--6 SNR points to identify threshold behavior.
+\item \textbf{Dither sweep:} vary number of states $M$ and dither amplitude $\delta_{\max}$.
+\item \textbf{Bandwidth sweep:} vary $K$ and effective bandwidth to test range sensitivity.
+\item \textbf{Geometry sweep:} object position grid (distance and azimuth/elevation sectors).
+\item \textbf{Nuisance sweep:} inject phase drift/CFO/calibration errors and compare FIM vs EFIM predictions.
+\item \textbf{Communication impact:} report SINR, BLER, throughput drop during sensing.
+\item \textbf{Bound comparison:} plot RMSE against PEB for each sweep.
+\end{enumerate}
+
+\subsection{Simulation methodology (implementation-oriented)}
+The following procedure can be implemented directly in a Monte Carlo simulator:
+\begin{enumerate}
+\item \textbf{Initialize geometry and channels:} set fixed BS/UE/RIS positions, near-field RIS model, and an object-location grid. Generate channels for direct, RIS-assisted serving, and object-scattered components.
+\item \textbf{Construct RIS states:} compute a serving profile $\bm{\Gamma}_0$ for UE communication, then generate $M-1$ micro-dither profiles $\{\bm{\Gamma}_m\}_{m=1}^{M-1}$.
+\item \textbf{Generate CSI measurements:} for each hypothesis ($\mathcal{H}_0$ no object, $\mathcal{H}_1$ object present), each RIS state $m$, subcarrier $k$, and repeat $t$, synthesize $y_{m,k,t}$ under AWGN and selected non-idealities.
+\item \textbf{Apply differential preprocessing:} compute $\Delta y_{m,k,t}=y_{m,k,t}-y_{0,k,t}$ and extract detection/localization features.
+\item \textbf{Run detector and estimator:} evaluate GLRT (or baseline detector) for ROC/AUC and run localization estimator when $\mathcal{H}_1$ is true.
+\item \textbf{Compute bounds and communication impact:} evaluate EFIM/PEB for each setup and report SINR/BLER/throughput changes during sensing.
+\item \textbf{Aggregate over trials:} run sufficient Monte Carlo trials and summarize mean and confidence intervals.
+\end{enumerate}
+
+\subsection{Default parameter ranges}
+Unless otherwise specified, a practical initial sweep is:
+\begin{itemize}
+\item \textbf{SNR:} $[-10, -5, 0, 5, 10, 15, 20]$ dB.
+\item \textbf{Dither states:} $M \in \{4, 8, 16, 32\}$.
+\item \textbf{Dither amplitude:} $\delta_{\max} \in \{5^\circ, 10^\circ, 20^\circ, 30^\circ\}$.
+\item \textbf{Subcarriers:} $K \in \{32, 64, 128, 256\}$.
+\item \textbf{Repeats per state:} $T \in \{4, 8, 16\}$.
+\item \textbf{Monte Carlo trials:} at least 200 per setup (increase to 500 for final plots).
+\end{itemize}
+These ranges can be tightened once a feasible operating region is identified.
+
+\section{Expected Contributions}
+\begin{enumerate}
+\item Communication-preserving near-field RIS sensing via micro-dithers around serving beam.
+\item Unified estimation and detection feasibility analysis using EFIM/CRB and GLRT.
+\item Dither codebook design with explicit communication-quality constraints.
+\item Practical validation showing detection/localization gains at low communication overhead.
+\end{enumerate}
+
+\section{Conclusion}
+The proposed framework extends opportunistic RIS-ISAC to static-object sensing without abandoning UE-oriented beam focusing. The feasibility analysis (EFIM/CRB) and detection theory (GLRT/ROC) provide a rigorous path to justify and optimize the approach.
+
+\end{document}

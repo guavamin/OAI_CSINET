@@ -28,6 +28,7 @@
 
 #define NFAPI_UE_MAX_NUM_CB 8
 #define NFAPI_MAX_NUM_UL_PDU 255
+#define NFAPI_NR_AI_CSI_FB_LATENT_BYTES 6
 #define NFAPI_MAX_NUM_CSI_RATEMATCH 4
 // Maximum number of neighboring cells that can be tracked simultaneously
 // Set to 1 due to PSS search limitation: pss_search_time_nr() returns only
@@ -72,6 +73,8 @@ typedef struct {
   uint16_t i1;
   uint8_t i2;
   uint8_t cqi;
+  bool ai_fb_valid;
+  uint8_t ai_fb_payload[NFAPI_NR_AI_CSI_FB_LATENT_BYTES];
   rlm_t radiolink_monitoring;
 } fapi_nr_l1_measurements_t;
 

@@ -1,2 +1,5 @@
 add_subdirectory(nr-cuup)
 add_subdirectory(nr-cu-nrppa)
+if(ENABLE_TESTS)
+  add_subdirectory(ai_fb)
+endif()

@@ -1,0 +1,138 @@
+% Compile with: pdflatex RIS_MAIN_BEAM_AND_SIDELOBE_DITHERING.tex
+\documentclass[11pt,a4paper]{article}
+\usepackage{amsmath,amssymb,bm,geometry}
+\usepackage[hidelinks]{hyperref}
+\geometry{margin=2.2cm}
+\newcommand{\C}{\mathbb{C}}
+\newcommand{\rx}{\mathrm{rx}}
+\title{RIS: Main beam toward RX + sidelobe-only environment scan}
+\author{}
+\date{}
+\begin{document}
+\maketitle
+
+This note reformulates the idea of \textbf{keeping the primary (focal) response aligned to the receiver} while using \textbf{dithering} to probe the environment---conceptually scanning \textbf{sidelobes} or ambient radiation---without destroying the main link.
+
+\section{What you are trying to do}
+
+You want a \textbf{two-part} surface modulation on the RIS:
+
+\begin{center}
+\begin{tabular}{|l|p{11cm}|}
+\hline
+\textbf{Main term} & Keeps the RIS-assisted contribution \textbf{strong and stable} at the RX (the ``beam'' or \textbf{focus} pointed at the RX). \\
+\hline
+\textbf{Dither / scan term} & Changes how energy is distributed \textbf{elsewhere} (sidelobes / off-focus regions) to \textbf{sense} scatterers, blockers, or changes---ideally with \textbf{minimal} impact on the RX. \\
+\hline
+\end{tabular}
+\end{center}
+
+Important: on a finite aperture you cannot literally move ``only'' sidelobes with \textbf{zero} effect on the main coupling unless you \textbf{constrain} how you dither. The rigorous formulation is: \textbf{keep the perturbation small and/or orthogonal to the RX coupling}.
+
+\section{Discrete RIS model (schematic)}
+
+Model the RIS by $N$ unit cells. Let the \textbf{complex spatial modulation} (per cell) be stacked in a vector:
+\begin{equation}
+\bm{\Gamma} = [\Gamma_1,\, \Gamma_2,\, \ldots,\, \Gamma_N]^{\mathsf{T}} \in \C^N.
+\end{equation}
+
+The \textbf{scalar} (or dominant) complex gain seen at the RX through the RIS path can be written schematically as an \textbf{inner product} with a \textbf{coupling vector} from the elements to the RX:
+\begin{equation}
+h_{\mathrm{RIS}} \propto \mathbf{g}_{\rx}^{\mathsf{H}}\, \bm{\Gamma}.
+\end{equation}
+
+\begin{itemize}
+\item $\mathbf{g}_{\rx} \in \C^N$ encodes how each element couples to the RX (phases, amplitudes, path aggregation).
+\item Your \textbf{baseline} ``point the main toward RX'' pattern is some $\bm{\Gamma}_0$ chosen so that $\mathbf{g}_{\rx}^{\mathsf{H}} \bm{\Gamma}_0$ is large (after any normalization you use).
+\end{itemize}
+
+This is the right abstraction for both \textbf{far-field steering} (where $\mathbf{g}_{\rx}$ looks like a plane-wave array response) and \textbf{near-field focusing} (where $\mathbf{g}_{\rx}$ includes \textbf{range and curvature}, not just angle).
+
+\section{Splitting main and dither}
+
+\subsection{Additive complex perturbation}
+\begin{equation}
+\bm{\Gamma}_k = \bm{\Gamma}_0 + \Delta\bm{\Gamma}_k.
+\end{equation}
+\begin{itemize}
+\item $\bm{\Gamma}_0$: fixed (or slowly tracked) \textbf{main} pattern toward the RX.
+\item $\Delta\bm{\Gamma}_k$: $k$-th \textbf{dither} pattern for environment scanning.
+\end{itemize}
+
+You usually \textbf{renormalize} $\bm{\Gamma}_k$ to satisfy hardware constraints (e.g.\ per-element magnitude limits).
+
+\subsection{Phase-only dither (common for passive RIS)}
+\begin{equation}
+\Gamma_{k,n} = \Gamma_{0,n}\, e^{j \delta_{k,n}}, \qquad n = 1,\ldots,N.
+\end{equation}
+\begin{itemize}
+\item $\bm{\delta}_k = [\delta_{k,1},\ldots,\delta_{k,N}]^{\mathsf{T}}$: small or structured \textbf{phase ripple} on top of the main profile.
+\end{itemize}
+
+\section{Two ways to get ``main stays, environment is probed''}
+
+\subsection{Null-space / orthogonal dither (strongest interpretation)}
+
+You want $\Delta\bm{\Gamma}_k$ to \textbf{not} move the RX coupling, in first order:
+\begin{equation}
+\mathbf{g}_{\rx}^{\mathsf{H}}\, \Delta\bm{\Gamma}_k \approx 0.
+\end{equation}
+
+So $\Delta\bm{\Gamma}_k$ lies approximately in the \textbf{orthogonal complement} of $\mathbf{g}_{\rx}$.
+
+\textbf{Construction (conceptual):}
+\begin{enumerate}
+\item Form $\mathbf{g}_{\rx}$ (from geometry + your near-field or far-field model, or from a simulator).
+\item Build an orthonormal basis $\{\mathbf{u}_1, \ldots, \mathbf{u}_M\}$ orthogonal to $\mathbf{g}_{\rx}$:
+\begin{equation}
+\mathbf{g}_{\rx}^{\mathsf{H}} \mathbf{u}_m = 0, \quad m = 1,\ldots,M.
+\end{equation}
+\item Define dither codewords as
+\begin{equation}
+\Delta\bm{\Gamma}_k = \sum_{m=1}^{M} \alpha_{k,m}\, \mathbf{u}_m,
+\end{equation}
+with small coefficients $\alpha_{k,m}$.
+\item Full pattern:
+\begin{equation}
+\bm{\Gamma}_k = \mathrm{Normalize}\bigl(\bm{\Gamma}_0 + \Delta\bm{\Gamma}_k\bigr).
+\end{equation}
+\end{enumerate}
+
+\textbf{Intuition:} the RX inner product stays dominated by $\bm{\Gamma}_0$; the dither mostly changes \textbf{how energy is distributed away from} the RX coupling---what you loosely call \textbf{sidelobes} or non-focal radiation.
+
+\subsection{Small high--spatial-frequency ripple (simpler, less controlled)}
+
+Add a \textbf{weak}, \textbf{rapidly varying} phase $\bm{\delta}_k$ on top of $\bm{\Gamma}_0$. Often leaves the coherent sum toward RX mostly unchanged if ripple is small and balanced; still perturbs off-boresight structure. Easier to implement than null-space projection but typically causes \textbf{some} main-link variation.
+
+\section{What the near-field case changes}
+
+\begin{itemize}
+\item \textbf{Far-field:} $\mathbf{g}_{\rx}$ is often well approximated by a \textbf{plane-wave} array steering vector.
+\item \textbf{Near-field (Fresnel region):} $\mathbf{g}_{\rx}$ must reflect \textbf{distance and wavefront curvature} across elements---not only angle.
+\end{itemize}
+
+So \textbf{main toward RX} should be \textbf{near-field-aware} $\bm{\Gamma}_0$, and \textbf{null-space dither} should be orthogonal to this \textbf{near-field coupling vector}, not only to a far-field steering vector.
+
+\section{Practical recipe}
+
+\begin{enumerate}
+\item Define $\mathbf{g}_{\rx}$ for your layout.
+\item Set $\bm{\Gamma}_0$ to maximize $|\mathbf{g}_{\rx}^{\mathsf{H}} \bm{\Gamma}_0|$ (often $\bm{\Gamma}_0 \propto \mathbf{g}_{\rx}^{*}$ up to normalization).
+\item Build basis $\{\mathbf{u}_m\}$ with $\mathbf{g}_{\rx}^{\mathsf{H}} \mathbf{u}_m = 0$.
+\item Form $\bm{\Gamma}_k = \mathrm{Normalize}(\bm{\Gamma}_0 + \sum_m \alpha_{k,m} \mathbf{u}_m)$ with small $\alpha_{k,m}$.
+\item Verify $|\mathbf{g}_{\rx}^{\mathsf{H}} \bm{\Gamma}_k|$ is stable across $k$.
+\end{enumerate}
+
+\section{Caveats}
+
+\begin{enumerate}
+\item \textbf{Exact} ``no change on main'' only holds in a \textbf{linear} sense; large phase-only dither still couples nonlinearly through $\exp(j\delta)$.
+\item \textbf{Normalization} can couple dither and main when projecting to feasible $\bm{\Gamma}_k$.
+\item In Sionna-style simulators you implement $\bm{\Gamma}_k$ as your own profiles on the RIS grid; this math is \textbf{your codebook design}.
+\end{enumerate}
+
+\section{One-line summary}
+
+\textbf{Keep a near-field-correct main pattern $\bm{\Gamma}_0$ aligned to the RX; add dither $\Delta\bm{\Gamma}_k$ that is approximately orthogonal to $\mathbf{g}_{\rx}$ so the primary link is preserved while the rest of the field is modulated for environment sensing.}
+
+\end{document}

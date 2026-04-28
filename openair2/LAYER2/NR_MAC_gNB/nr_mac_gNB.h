@@ -65,6 +65,8 @@
     AssertFatal(rc == EBUSY, "this function should be called with the scheduler mutex locked, pthread_mutex_trylock() returned %d\n", rc);\
   } while (0)
 
+#define NR_AI_FB_ROLLING_WINDOW 64
+
 /* Commmon */
 #include "radio/COMMON/common_lib.h"
 #include "common/platform_constants.h"
@@ -189,6 +191,12 @@ typedef struct nr_mac_config_s {
   int pusch_AntennaPorts;
   int minRXTXTIME;
   int do_CSIRS;
+  /** CSI-RS periodicity in slots (0 = auto from scheduler). Allowed: 4,5,8,10,16,20,40,80,160,320. Lower = more frequent. */
+  int csi_rs_periodicity_slots;
+  /** CSI-RS slot offset within the periodicity (0..period-1). -1 = auto (current default behavior). */
+  int csi_rs_slot_offset;
+  /** SRS periodicity in slots (0 = auto). Allowed: 4,5,8,10,16,20,32,40,64,80,160,320,640,1280,2560. Lower = more frequent. */
+  int srs_periodicity_slots;
   int do_SRS;
   int do_TCI;
   int max_num_rsrp;
@@ -666,6 +674,52 @@ typedef struct {
   int ul_failure_timer;
   int release_timer;
   CSI_report_t CSI_report;
+  bool ai_fb_seen;
+  uint8_t legacy_pmi_x1;
+  uint8_t legacy_pmi_x2;
+  uint8_t custom_pmi_x1;
+  uint8_t custom_pmi_x2;
+  frame_t ai_fb_frame;
+  slot_t ai_fb_slot;
+  uint32_t ai_fb_custom_decodes;
+  uint32_t ai_fb_legacy_decodes;
+  uint32_t ai_fb_pmi_matches;
+  uint32_t ai_fb_bundle_decodes;
+  uint32_t ai_fb_bundle_pmi_matches;
+  uint32_t ai_fb_bundle_eff_pmi_samples;
+  uint32_t ai_fb_bundle_eff_pmi_matches;
+  uint8_t ai_fb_eff_legacy_pmi_x2;
+  uint8_t ai_fb_eff_custom_pmi_x2;
+  uint8_t ai_fb_eff_legacy_pending_x2;
+  uint8_t ai_fb_eff_custom_pending_x2;
+  uint8_t ai_fb_eff_legacy_pending_count;
+  uint8_t ai_fb_eff_custom_pending_count;
+  bool ai_fb_eff_pmi_init;
+  uint32_t ai_fb_roll_count;
+  uint32_t ai_fb_roll_pos;
+  uint32_t ai_fb_roll_pmi_matches;
+  uint32_t ai_fb_roll_ri_matches;
+  uint32_t ai_fb_roll_dir_count;
+  uint32_t ai_fb_roll_dir_samples;
+  double ai_fb_roll_legacy_score[NR_AI_FB_ROLLING_WINDOW];
+  double ai_fb_roll_custom_metric[NR_AI_FB_ROLLING_WINDOW];
+  double ai_fb_roll_dir_sim[NR_AI_FB_ROLLING_WINDOW];
+  uint8_t ai_fb_roll_pmi_match[NR_AI_FB_ROLLING_WINDOW];
+  uint8_t ai_fb_roll_ri_match[NR_AI_FB_ROLLING_WINDOW];
+  uint8_t ai_fb_roll_dir_valid[NR_AI_FB_ROLLING_WINDOW];
+  bool ai_fb_runtime_tuple_valid;
+  bool ai_fb_runtime_tuple_fresh;
+  uint8_t ai_fb_runtime_ri;
+  uint8_t ai_fb_runtime_pmi_x1;
+  uint8_t ai_fb_runtime_pmi_x2;
+  uint8_t ai_fb_runtime_cqi;
+  frame_t ai_fb_runtime_frame;
+  slot_t ai_fb_runtime_slot;
+  uint32_t ai_fb_runtime_obs_seq;
+  uint32_t ai_fb_runtime_override_used;
+  uint32_t ai_fb_runtime_fallback_missing;
+  uint32_t ai_fb_runtime_fallback_stale;
+  uint32_t ai_fb_runtime_fallback_incomplete;
   bool SR;
   /// information about every HARQ process
   NR_UE_harq_t harq_processes[NR_MAX_HARQ_PROCESSES];

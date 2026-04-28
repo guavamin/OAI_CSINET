@@ -401,6 +401,8 @@ uint8_t get_mcs_from_cqi(int mcs_table, int cqi_table, int cqi_idx);
 
 uint8_t get_dl_nrOfLayers(const NR_UE_sched_ctrl_t *sched_ctrl, const nr_dci_format_t dci_format);
 int get_ul_nrOfLayers(const NR_UE_sched_ctrl_t *sched_ctrl, const nr_dci_format_t dci_format);
+void ai_fb_runtime_refresh_sched_tuple(const gNB_MAC_INST *nrmac, NR_UE_sched_ctrl_t *sched_ctrl, frame_t frame, slot_t slot);
+int ai_fb_runtime_get_effective_dl_max_mcs(const NR_UE_info_t *UE, const NR_UE_sched_ctrl_t *sched_ctrl);
 
 void free_sched_pucch_list(NR_UE_sched_ctrl_t *sched_ctrl);
 bool add_UE_to_list(int list_size, NR_UE_info_t *list[list_size], NR_UE_info_t *UE);

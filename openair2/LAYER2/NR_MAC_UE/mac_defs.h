@@ -611,6 +611,18 @@ typedef struct NR_UE_MAC_INST_s {
 
   NR_SSB_meas_t ssb_measurements[MAX_NB_SSB];
   NR_CSIRS_meas_t csirs_measurements;
+  bool ai_fb_valid;
+  uint8_t ai_fb_payload[NR_AI_CSI_FB_LATENT_BYTES];
+  frame_t ai_fb_frame;
+  slot_t ai_fb_slot;
+  uint32_t csi_obs_seq;
+  uint32_t ai_fb_obs_seq;
+  bool legacy_csi_raw_valid;
+  uint8_t legacy_csi_p1_bits;
+  uint64_t legacy_csi_part1_payload;
+  frame_t legacy_csi_frame;
+  slot_t legacy_csi_slot;
+  uint32_t legacy_csi_obs_seq;
   ssb_ro_preambles_t ssb_ro_preambles;
 
   dci_pdu_rel15_t def_dci_pdu_rel15[NR_MAX_SLOTS_PER_FRAME][8];

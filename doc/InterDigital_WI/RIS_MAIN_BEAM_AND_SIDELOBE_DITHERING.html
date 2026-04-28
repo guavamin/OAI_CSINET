@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RIS: Main beam toward RX + sidelobe-only environment scan</title>
+  <style>
+    body { font-family: system-ui, Segoe UI, Roboto, Helvetica, Arial, sans-serif; line-height: 1.55; max-width: 52rem; margin: 2rem auto; padding: 0 1.2rem; color: #1a1a1a; }
+    h1 { font-size: 1.55rem; border-bottom: 1px solid #ccc; padding-bottom: 0.35rem; }
+    h2 { font-size: 1.2rem; margin-top: 1.75rem; }
+    h3 { font-size: 1.05rem; margin-top: 1.25rem; }
+    table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.95rem; }
+    th, td { border: 1px solid #ccc; padding: 0.45rem 0.65rem; text-align: left; vertical-align: top; }
+    th { background: #f5f5f5; }
+    hr { border: none; border-top: 1px solid #ddd; margin: 1.5rem 0; }
+    .muted { color: #555; font-size: 0.9rem; margin-top: 2rem; }
+    mjx-container { font-size: 105% !important; }
+  </style>
+  <script>
+    MathJax = {
+      tex: {
+        inlineMath: [['\\(', '\\)']],
+        displayMath: [['\\[', '\\]']],
+        tags: 'ams'
+      },
+      chtml: { scale: 1.05 }
+    };
+  </script>
+  <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
+</head>
+<body>
+
+<h1>RIS: Main beam toward RX + sidelobe-only environment scan</h1>
+
+<p>This note reformulates the idea of <strong>keeping the primary (focal) response aligned to the receiver</strong> while using <strong>dithering</strong> to probe the environment—conceptually scanning <strong>sidelobes</strong> or “ambient” radiation—without destroying the main link.</p>
+
+<hr>
+
+<h2>1. What you are trying to do</h2>
+
+<p>You want a <strong>two-part</strong> surface modulation on the RIS:</p>
+
+<table>
+  <thead><tr><th>Part</th><th>Role</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Main term</strong></td><td>Keeps the RIS-assisted contribution <strong>strong and stable</strong> at the RX (the “beam” or <strong>focus</strong> pointed at the RX).</td></tr>
+    <tr><td><strong>Dither / scan term</strong></td><td>Changes how energy is distributed <strong>elsewhere</strong> (sidelobes / off-focus regions) to <strong>sense</strong> scatterers, blockers, or changes—ideally with <strong>minimal</strong> impact on the RX.</td></tr>
+  </tbody>
+</table>
+
+<p>Important: on a finite aperture you cannot literally move “only” sidelobes with <strong>zero</strong> effect on the main coupling unless you <strong>constrain</strong> how you dither. The rigorous formulation is: <strong>keep the perturbation small and/or orthogonal to the RX coupling</strong>.</p>
+
+<hr>
+
+<h2>2. Discrete RIS model (schematic)</h2>
+
+<p>Model the RIS by <strong>\(N\)</strong> unit cells. Let the <strong>complex spatial modulation</strong> (per cell) be stacked in a vector:</p>
+
+\[
+\boldsymbol{\Gamma} = [\Gamma_1,\, \Gamma_2,\, \ldots,\, \Gamma_N]^{\mathsf{T}} \in \mathbb{C}^N.
+\]
+
+<p>The <strong>scalar</strong> (or dominant) complex gain seen at the RX through the RIS path can be written schematically as an <strong>inner product</strong> with a <strong>coupling vector</strong> from the elements to the RX (this hides TX–RIS propagation inside the same effective model):</p>
+
+\[
+h_{\mathrm{RIS}} \;\propto\; \mathbf{g}_{\mathrm{rx}}^{\mathsf{H}}\, \boldsymbol{\Gamma}.
+\]
+
+<ul>
+  <li>\(\mathbf{g}_{\mathrm{rx}} \in \mathbb{C}^N\) encodes how each element couples to the RX (phases, amplitudes, path aggregation).</li>
+  <li>Your <strong>baseline</strong> “point the main toward RX” pattern is some \(\boldsymbol{\Gamma}_0\) chosen so that \(\mathbf{g}_{\mathrm{rx}}^{\mathsf{H}} \boldsymbol{\Gamma}_0\) is large (after any normalization you use).</li>
+</ul>
+
+<p>This is the right abstraction for both <strong>far-field steering</strong> (where \(\mathbf{g}_{\mathrm{rx}}\) looks like a plane-wave array response) and <strong>near-field focusing</strong> (where \(\mathbf{g}_{\mathrm{rx}}\) includes <strong>range and curvature</strong>, not just angle).</p>
+
+<hr>
+
+<h2>3. Splitting main and dither</h2>
+
+<h3>3.1 Additive complex perturbation</h3>
+
+\[
+\boldsymbol{\Gamma}_k \;=\; \boldsymbol{\Gamma}_0 \;+\; \Delta\boldsymbol{\Gamma}_k.
+\]
+
+<ul>
+  <li>\(\boldsymbol{\Gamma}_0\): fixed (or slowly tracked) <strong>main</strong> pattern toward the RX.</li>
+  <li>\(\Delta\boldsymbol{\Gamma}_k\): <strong>\(k\)-th dither</strong> pattern for environment scanning.</li>
+</ul>
+
+<p>You usually <strong>renormalize</strong> \(\boldsymbol{\Gamma}_k\) to satisfy hardware constraints (e.g. per-element magnitude limits).</p>
+
+<h3>3.2 Phase-only dither (common for passive RIS)</h3>
+
+\[
+\Gamma_{k,n} \;=\; \Gamma_{0,n}\, e^{\,j \delta_{k,n}}, \qquad n = 1,\ldots,N.
+\]
+
+<ul>
+  <li>\(\boldsymbol{\delta}_k = [\delta_{k,1},\ldots,\delta_{k,N}]^{\mathsf{T}}\): small or structured <strong>phase ripple</strong> on top of the main profile.</li>
+</ul>
+
+<hr>
+
+<h2>4. Two ways to get “main stays, environment is probed”</h2>
+
+<h3>4.1 Null-space / orthogonal dither (strongest interpretation)</h3>
+
+<p>You want \(\Delta\boldsymbol{\Gamma}_k\) to <strong>not</strong> move the RX coupling, in first order:</p>
+
+\[
+\mathbf{g}_{\mathrm{rx}}^{\mathsf{H}}\, \Delta\boldsymbol{\Gamma}_k \;\approx\; 0.
+\]
+
+<p>So \(\Delta\boldsymbol{\Gamma}_k\) lies approximately in the <strong>orthogonal complement</strong> of \(\mathbf{g}_{\mathrm{rx}}\) (the “null space” of the linear map to the RX scalar, in finite dimension).</p>
+
+<p><strong>Construction (conceptual):</strong></p>
+
+<ol>
+  <li>Form \(\mathbf{g}_{\mathrm{rx}}\) (from geometry + your near-field or far-field model, or from a simulator).</li>
+  <li>Build an orthonormal basis \(\{\mathbf{u}_1, \ldots, \mathbf{u}_M\}\) spanning directions <strong>orthogonal</strong> to \(\mathbf{g}_{\mathrm{rx}}\):
+    \[
+    \mathbf{g}_{\mathrm{rx}}^{\mathsf{H}} \mathbf{u}_m = 0, \quad m = 1,\ldots,M.
+    \]
+  </li>
+  <li>Define dither codewords as:
+    \[
+    \Delta\boldsymbol{\Gamma}_k \;=\; \sum_{m=1}^{M} \alpha_{k,m}\, \mathbf{u}_m,
+    \]
+    with small coefficients \(\alpha_{k,m}\).
+  </li>
+  <li>Full pattern:
+    \[
+    \boldsymbol{\Gamma}_k \;=\; \mathrm{Normalize}\bigl(\boldsymbol{\Gamma}_0 + \Delta\boldsymbol{\Gamma}_k\bigr).
+    \]
+  </li>
+</ol>
+
+<p><strong>Intuition:</strong> the RX inner product stays dominated by \(\boldsymbol{\Gamma}_0\); the dither mostly changes <strong>how energy is distributed away from</strong> the RX coupling—what you loosely call <strong>sidelobes</strong> or non-focal radiation.</p>
+
+<hr>
+
+<h3>4.2 Small high–spatial-frequency ripple (simpler, less controlled)</h3>
+
+<p>Add a <strong>weak</strong>, <strong>rapidly varying</strong> phase \(\boldsymbol{\delta}_k\) on top of \(\boldsymbol{\Gamma}_0\):</p>
+
+<ul>
+  <li>Often leaves the <strong>coherent sum toward RX</strong> mostly unchanged if ripple is <strong>small</strong> and <strong>balanced</strong>.</li>
+  <li>Still perturbs <strong>off-boresight</strong> structure so the environment is <strong>illuminated differently</strong> across codewords \(k\).</li>
+</ul>
+
+<p>This is easier to implement than explicit null-space projection but typically causes <strong>some</strong> main-link variation.</p>
+
+<hr>
+
+<h2>5. What the near-field case changes</h2>
+
+<ul>
+  <li><strong>Far-field:</strong> \(\mathbf{g}_{\mathrm{rx}}\) is often well approximated by a <strong>plane-wave</strong> array steering vector (depends mainly on <strong>direction</strong>).</li>
+  <li><strong>Near-field (Fresnel region of the aperture):</strong> \(\mathbf{g}_{\mathrm{rx}}\) must reflect <strong>distance and wavefront curvature</strong> across elements—not only angle.</li>
+</ul>
+
+<p>So:</p>
+
+<ul>
+  <li><strong>Main toward RX</strong> should be a <strong>near-field-aware</strong> \(\boldsymbol{\Gamma}_0\) (e.g. focal / distance-corrected phase), not only a single-direction beam.</li>
+  <li><strong>Null-space dither</strong> should be orthogonal to this <strong>near-field coupling vector</strong>, not to a far-field steering vector only.</li>
+</ul>
+
+<p>That is what enables “scanning” that is <strong>spatially rich</strong> (energy in different <strong>3D</strong> regions), not just scanning different <strong>angles</strong> from the array broadside.</p>
+
+<hr>
+
+<h2>6. Practical recipe (workflow)</h2>
+
+<table>
+  <thead><tr><th>Step</th><th>Action</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>Define \(\mathbf{g}_{\mathrm{rx}}\) for your layout (analytical approximation or from ray/EM simulation).</td></tr>
+    <tr><td>2</td><td>Set \(\boldsymbol{\Gamma}_0\) to maximize \(|\mathbf{g}_{\mathrm{rx}}^{\mathsf{H}} \boldsymbol{\Gamma}_0|\) under your constraints (often \(\boldsymbol{\Gamma}_0 \propto \mathbf{g}_{\mathrm{rx}}^{*}\) up to normalization).</td></tr>
+    <tr><td>3</td><td>Build basis \(\{\mathbf{u}_m\}\) with \(\mathbf{g}_{\mathrm{rx}}^{\mathsf{H}} \mathbf{u}_m = 0\).</td></tr>
+    <tr><td>4</td><td>Form codewords \(\boldsymbol{\Gamma}_k = \mathrm{Normalize}(\boldsymbol{\Gamma}_0 + \sum_m \alpha_{k,m} \mathbf{u}_m)\) with small \(\alpha_{k,m}\).</td></tr>
+    <tr><td>5</td><td><strong>Verify</strong> \(|\mathbf{g}_{\mathrm{rx}}^{\mathsf{H}} \boldsymbol{\Gamma}_k|\) is stable across \(k\); reduce \(\alpha\) or re-orthogonalize if the main link moves too much.</td></tr>
+  </tbody>
+</table>
+
+<hr>
+
+<h2>7. Caveats</h2>
+
+<ol>
+  <li><strong>Exact</strong> “no change on main” only holds in a <strong>linear</strong> sense; large phase-only dither still couples to \(\mathbf{g}_{\mathrm{rx}}\) nonlinearly through \(\exp(j\delta)\).</li>
+  <li><strong>Normalization</strong> (unit-modulus elements, power constraints) can couple dither and main when you project back to feasible \(\boldsymbol{\Gamma}_k\).</li>
+  <li><strong>Sionna (and similar RT tools):</strong> you implement \(\boldsymbol{\Gamma}_k\) as your own <strong>phase/amplitude profiles</strong> on the RIS grid; there is no built-in “sidelobe-only” mode—this math is <strong>your codebook design</strong>, then the simulator evaluates the scene.</li>
+</ol>
+
+<hr>
+
+<h2>8. One-line summary</h2>
+
+<p><strong>Keep a near-field-correct main pattern \(\boldsymbol{\Gamma}_0\) aligned to the RX; add dither \(\Delta\boldsymbol{\Gamma}_k\) that is approximately orthogonal to \(\mathbf{g}_{\mathrm{rx}}\) so the primary link is preserved while the rest of the field is modulated for environment sensing.</strong></p>
+
+<p class="muted">Open this <code>.html</code> file in a browser (online MathJax CDN required once) to see rendered LaTeX. For a printable PDF, use the companion <code>.tex</code> file with <code>pdflatex</code>.</p>
+
+</body>
+</html>
