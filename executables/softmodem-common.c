@@ -53,6 +53,11 @@ softmodem_params_t *get_softmodem_params(void) {
   return &softmodem_params;
 }
 
+const char *get_imscope_windows_filter(void)
+{
+  return get_softmodem_params()->imscope_windows;
+}
+
 char *get_softmodem_function(void)
 {
   optmask_t fmask = *get_softmodem_optmask();
@@ -101,11 +106,11 @@ void get_common_options(configmodule_interface_t *cfg)
   config_set_checkfunctions(cmdline_logparams, cmdline_log_CheckParams, numlogparams);
   config_get(cfg, cmdline_logparams, numlogparams, NULL);
 
-  if(config_isparamset(cmdline_logparams,config_paramidx_fromname(cmdline_logparams,numparams, CONFIG_FLOG_OPT))) {
+  if(config_isparamset(cmdline_logparams,config_paramidx_fromname(cmdline_logparams,numlogparams, CONFIG_FLOG_OPT))) {
     set_glog_onlinelog(online_log_messages);
   }
 
-  if(config_isparamset(cmdline_logparams,config_paramidx_fromname(cmdline_logparams,numparams, CONFIG_LOGL_OPT))) {
+  if(config_isparamset(cmdline_logparams,config_paramidx_fromname(cmdline_logparams,numlogparams, CONFIG_LOGL_OPT))) {
     set_glog(glog_level);
   }
 
@@ -156,6 +161,165 @@ void get_common_options(configmodule_interface_t *cfg)
   nfapi_setmode(nfapi_mode);
   if (stats_disabled)
     IS_SOFTMODEM_NOSTATS = true;
+  AssertFatal(get_softmodem_params()->dl_ri_use_decoded == 0 || get_softmodem_params()->dl_ri_use_decoded == 1,
+              "--dl-ri-use-decoded expects 0 or 1 (is %d)\n",
+              get_softmodem_params()->dl_ri_use_decoded);
+  LOG_I(UTIL,
+        "DL RI policy: %s (--dl-ri-use-decoded=%d)\n",
+        get_softmodem_params()->dl_ri_use_decoded ? "decoded RI" : "capped/scheduled RI",
+        get_softmodem_params()->dl_ri_use_decoded);
+
+  AssertFatal(get_softmodem_params()->print_csi_debug == 0 || get_softmodem_params()->print_csi_debug == 1,
+              "--print-csi-debug expects 0 or 1 (is %d)\n",
+              get_softmodem_params()->print_csi_debug);
+  if (get_softmodem_params()->print_csi_debug)
+    LOG_I(UTIL, "CSI debug prints enabled (--print-csi-debug=1)\n");
+  AssertFatal(get_softmodem_params()->ai_fb_ulsch_enable == 0 || get_softmodem_params()->ai_fb_ulsch_enable == 1,
+              "--ai-fb-ulsch-enable expects 0 or 1 (is %d)\n",
+              get_softmodem_params()->ai_fb_ulsch_enable);
+  if (get_softmodem_params()->ai_fb_ulsch_enable)
+    LOG_I(UTIL, "Lab AI CSI UL-SCH path enabled (--ai-fb-ulsch-enable=1)\n");
+  AssertFatal(get_softmodem_params()->ai_fb_impl_mode >= 0 && get_softmodem_params()->ai_fb_impl_mode <= 5,
+              "--ai-fb-impl-mode expects 0,1,2,3,4,5 (is %d)\n",
+              get_softmodem_params()->ai_fb_impl_mode);
+  AssertFatal(get_softmodem_params()->ai_fb_force_rank1 == 0 || get_softmodem_params()->ai_fb_force_rank1 == 1,
+              "--ai-fb-force-rank1 expects 0 or 1 (is %d)\n",
+              get_softmodem_params()->ai_fb_force_rank1);
+  if ((get_softmodem_params()->ai_fb_impl_mode == 4 || get_softmodem_params()->ai_fb_impl_mode == 5)
+      && get_softmodem_params()->ai_fb_force_rank1 != 0) {
+    LOG_W(UTIL,
+      "Lab AI FB angular-delay mode requires rank-2 capable legacy CSI decode; overriding --ai-fb-force-rank1 to 0\n");
+    get_softmodem_params()->ai_fb_force_rank1 = 0;
+  }
+  AssertFatal(get_softmodem_params()->ai_fb_model_backend >= 0 && get_softmodem_params()->ai_fb_model_backend <= 2,
+              "--ai-fb-model-backend expects 0,1,2 (is %d)\n",
+              get_softmodem_params()->ai_fb_model_backend);
+  AssertFatal(get_softmodem_params()->ai_fb_csinet_latent_bytes > 0,
+              "--ai-fb-csinet-latent-bytes expects >0 (is %d)\n",
+              get_softmodem_params()->ai_fb_csinet_latent_bytes);
+  AssertFatal(get_softmodem_params()->ai_fb_compare_gating == 0 || get_softmodem_params()->ai_fb_compare_gating == 1,
+              "--ai-fb-compare-gating expects 0 or 1 (is %d)\n",
+              get_softmodem_params()->ai_fb_compare_gating);
+  AssertFatal(get_softmodem_params()->ai_fb_compare_max_age_slots >= 0,
+              "--ai-fb-compare-max-age-slots expects >=0 (is %d)\n",
+              get_softmodem_params()->ai_fb_compare_max_age_slots);
+  AssertFatal(get_softmodem_params()->ai_fb_bundled_ulsch_enable == 0 || get_softmodem_params()->ai_fb_bundled_ulsch_enable == 1,
+              "--ai-fb-bundled-ulsch-enable expects 0 or 1 (is %d)\n",
+              get_softmodem_params()->ai_fb_bundled_ulsch_enable);
+  AssertFatal(get_softmodem_params()->ai_fb_eff_pmi_hyst >= 1,
+              "--ai-fb-eff-pmi-hyst expects >=1 (is %d)\n",
+              get_softmodem_params()->ai_fb_eff_pmi_hyst);
+  AssertFatal(get_softmodem_params()->ai_fb_runtime_sched_mode >= 0 && get_softmodem_params()->ai_fb_runtime_sched_mode <= 2,
+              "--ai-fb-runtime-sched-mode expects 0,1,2 (is %d)\n",
+              get_softmodem_params()->ai_fb_runtime_sched_mode);
+  AssertFatal(get_softmodem_params()->ai_fb_runtime_sched_max_age_slots >= 0,
+              "--ai-fb-runtime-sched-max-age-slots expects >=0 (is %d)\n",
+              get_softmodem_params()->ai_fb_runtime_sched_max_age_slots);
+  AssertFatal(get_softmodem_params()->ai_fb_runtime_sched_require_full == 0 || get_softmodem_params()->ai_fb_runtime_sched_require_full == 1,
+              "--ai-fb-runtime-sched-require-full expects 0 or 1 (is %d)\n",
+              get_softmodem_params()->ai_fb_runtime_sched_require_full);
+  AssertFatal(get_softmodem_params()->ai_fb_runtime_log_enable == 0 || get_softmodem_params()->ai_fb_runtime_log_enable == 1,
+              "--ai-fb-runtime-log-enable expects 0 or 1 (is %d)\n",
+              get_softmodem_params()->ai_fb_runtime_log_enable);
+  AssertFatal(get_softmodem_params()->ai_fb_runtime_log_period_frames >= 0,
+              "--ai-fb-runtime-log-period-frames expects >=0 (is %d)\n",
+              get_softmodem_params()->ai_fb_runtime_log_period_frames);
+  AssertFatal(get_softmodem_params()->srs_imscope_log_enable == 0 || get_softmodem_params()->srs_imscope_log_enable == 1,
+              "--srs-imscope-log-enable expects 0 or 1 (is %d)\n",
+              get_softmodem_params()->srs_imscope_log_enable);
+  AssertFatal(get_softmodem_params()->csi_i2_hyst_threshold >= 0,
+              "--csi-i2-hyst-threshold expects >=0 (is %d)\n",
+              get_softmodem_params()->csi_i2_hyst_threshold);
+  AssertFatal(get_softmodem_params()->csi_i2_hyst_window >= 0,
+              "--csi-i2-hyst-window expects >=0 (is %d)\n",
+              get_softmodem_params()->csi_i2_hyst_window);
+  if (get_softmodem_params()->ai_fb_ulsch_enable) {
+    const char *impl = "matrix";
+    if (get_softmodem_params()->ai_fb_impl_mode == 1)
+      impl = "mlp-stub";
+    else if (get_softmodem_params()->ai_fb_impl_mode == 2)
+      impl = "model-stub";
+    else if (get_softmodem_params()->ai_fb_impl_mode == 3)
+      impl = "csinet";
+    else if (get_softmodem_params()->ai_fb_impl_mode == 4)
+      impl = "angular-delay-mlp";
+    else if (get_softmodem_params()->ai_fb_impl_mode == 5)
+      impl = "angular-delay-refinenet";
+    LOG_I(UTIL, "Lab AI FB impl mode: %s (--ai-fb-impl-mode=%d)\n", impl, get_softmodem_params()->ai_fb_impl_mode);
+    LOG_I(UTIL,
+          "Lab AI FB rank policy: %s (--ai-fb-force-rank1=%d)\n",
+          get_softmodem_params()->ai_fb_force_rank1 ? "forced rank-1" : "normal multi-rank",
+          get_softmodem_params()->ai_fb_force_rank1);
+    LOG_I(UTIL,
+          "Lab AI FB compare gating: %s (--ai-fb-compare-gating=%d, --ai-fb-compare-max-age-slots=%d)\n",
+          get_softmodem_params()->ai_fb_compare_gating ? "enabled" : "disabled",
+          get_softmodem_params()->ai_fb_compare_gating,
+          get_softmodem_params()->ai_fb_compare_max_age_slots);
+    LOG_I(UTIL,
+          "Lab AI FB bundled UL-SCH CE: %s (--ai-fb-bundled-ulsch-enable=%d)\n",
+          get_softmodem_params()->ai_fb_bundled_ulsch_enable ? "enabled" : "disabled",
+          get_softmodem_params()->ai_fb_bundled_ulsch_enable);
+    LOG_I(UTIL,
+          "Lab AI FB effective PMI hysteresis: %d (--ai-fb-eff-pmi-hyst=%d)\n",
+          get_softmodem_params()->ai_fb_eff_pmi_hyst,
+          get_softmodem_params()->ai_fb_eff_pmi_hyst);
+    LOG_I(UTIL,
+          "Lab AI FB runtime scheduling mode: %d (--ai-fb-runtime-sched-mode=%d, --ai-fb-runtime-sched-max-age-slots=%d, --ai-fb-runtime-sched-require-full=%d, --ai-fb-runtime-log-enable=%d, --ai-fb-runtime-log-period-frames=%d)\n",
+          get_softmodem_params()->ai_fb_runtime_sched_mode,
+          get_softmodem_params()->ai_fb_runtime_sched_mode,
+          get_softmodem_params()->ai_fb_runtime_sched_max_age_slots,
+          get_softmodem_params()->ai_fb_runtime_sched_require_full,
+          get_softmodem_params()->ai_fb_runtime_log_enable,
+          get_softmodem_params()->ai_fb_runtime_log_period_frames);
+    LOG_I(UTIL,
+          "UE CSI i2 smoothing knobs: threshold=%d (--csi-i2-hyst-threshold), window=%d (--csi-i2-hyst-window)\n",
+          get_softmodem_params()->csi_i2_hyst_threshold,
+          get_softmodem_params()->csi_i2_hyst_window);
+    LOG_I(UTIL,
+          "SRS/imscope logs: %s (--srs-imscope-log-enable=%d)\n",
+          get_softmodem_params()->srs_imscope_log_enable ? "enabled" : "disabled",
+          get_softmodem_params()->srs_imscope_log_enable);
+    if (get_softmodem_params()->ai_fb_impl_mode == 2) {
+      const char *mp = get_softmodem_params()->ai_fb_model_path;
+      const char *encp = get_softmodem_params()->ai_fb_onnx_enc_path;
+      const char *decp = get_softmodem_params()->ai_fb_onnx_dec_path;
+      const char *backend = "native";
+      if (get_softmodem_params()->ai_fb_model_backend == 1)
+        backend = "onnx-stub";
+      else if (get_softmodem_params()->ai_fb_model_backend == 2)
+        backend = "tflite-stub";
+      LOG_I(UTIL,
+            "Lab AI FB model path: %s, backend: %s (--ai-fb-model-backend=%d)\n",
+            (mp && mp[0] != '\0') ? mp : "(unset, will fallback to compiled MLP weights)",
+            backend,
+            get_softmodem_params()->ai_fb_model_backend);
+      if (get_softmodem_params()->ai_fb_model_backend == 1) {
+        LOG_I(UTIL,
+              "Lab AI FB ONNX paths: enc=%s dec=%s\n",
+              (encp && encp[0] != '\0') ? encp : "(unset)",
+              (decp && decp[0] != '\0') ? decp : "(unset)");
+      }
+    }
+    if (get_softmodem_params()->ai_fb_impl_mode == 3) {
+      const char *cp = get_softmodem_params()->ai_fb_csinet_model_path;
+      LOG_I(UTIL,
+            "Lab AI FB CSINet model path: %s, requested latent bytes: %d (phase-1 transport fixed at 6 bytes)\n",
+            (cp && cp[0] != '\0') ? cp : "(unset)",
+            get_softmodem_params()->ai_fb_csinet_latent_bytes);
+    }
+    if (get_softmodem_params()->ai_fb_impl_mode == 4) {
+      const char *mp = get_softmodem_params()->ai_fb_model_path;
+      LOG_I(UTIL,
+            "Lab AI FB angular-delay model path: %s (2D-DFT + 24-delay-row preprocessing enabled in UE runtime)\n",
+            (mp && mp[0] != '\0') ? mp : "(unset, fallback to compiled angular-delay defaults)");
+    }
+    if (get_softmodem_params()->ai_fb_impl_mode == 5) {
+      const char *mp = get_softmodem_params()->ai_fb_model_path;
+      LOG_I(UTIL,
+            "Lab AI FB angular-delay RefineNet model path: %s (conv+refinenet autoencoder over [24x4] angular-delay features)\n",
+            (mp && mp[0] != '\0') ? mp : "(unset, fallback to compiled angular-delay defaults)");
+    }
+  }
 
   // To be removed in a future release (after 1 month)
   AssertFatal(get_softmodem_params()->default_pdu_session_id == -1,

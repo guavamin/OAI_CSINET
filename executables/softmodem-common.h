@@ -72,7 +72,9 @@ extern "C"
 #define CONFIG_HLP_CHESTFREQ     "Set channel estimation type in frequency domain. 0-Linear interpolation (default). 1-PRB based averaging of channel estimates in frequency. \n"
 #define CONFIG_HLP_CHESTTIME     "Set channel estimation type in time domain. 0-Symbols take estimates of the last preceding DMRS symbol (default). 1-Symbol based averaging of channel estimates in time. \n"
 #define CONFIG_HLP_IMSCOPE       "Enable phy scope based on imgui and implot"
+#define CONFIG_HLP_IMSCOPE_WINDOWS "Comma-separated list of imscope window titles to show; default: all windows. Only listed windows are shown (one app window, dockable). Use exact titles. UE: UE KPI, UE PDCCH IQ, UE PDCCH LLR, UE PDSCH IQ, UE PDSCH Chan est, UE PDSCH IQ before compensation, UE CSI-RS channel estimates, UE CSI-RS channel estimates (per RX-TX link), Time domain samples, Time domain samples - before sync, Broadcast channel. gNB: PUSCH SLOT IQ, PUSCH LLRs, Time domain samples, SRS channel estimates, SRS channel estimates (per RX-port link), CSI report parameters."
 #define CONFIG_HLP_IMSCOPE_RECORD "Enable recording scope data to filesystem"
+#define CONFIG_HLP_CSI_RECORD_GNB "gNB: directory to record CSI-RS scheduling and decoded CSI feedback (gnb_csirs_scheduling.csv, gnb_csi_feedback.csv). Disabled if unset.\n"
 
 #define CONFIG_HLP_NONSTOP       "Go back to frame sync mode after 100 consecutive PBCH failures\n"
 
@@ -126,6 +128,32 @@ extern "C"
 #define CONTINUOUS_TX       softmodem_params.continuous_tx
 #define SYNC_REF            softmodem_params.sync_ref
 #define DEFAULT_PDU_ID      softmodem_params.default_pdu_session_id
+#define CSI_RECORD_PATH     softmodem_params.csi_record_path
+#define IMSCOPE_WINDOWS     softmodem_params.imscope_windows
+#define DL_RI_USE_DECODED   softmodem_params.dl_ri_use_decoded
+#define PRINT_CSI_DEBUG     softmodem_params.print_csi_debug
+#define AI_FB_ULSCH_ENABLE  softmodem_params.ai_fb_ulsch_enable
+#define AI_FB_LOG_PATH      softmodem_params.ai_fb_log_path
+#define AI_FB_IMPL_MODE     softmodem_params.ai_fb_impl_mode
+#define AI_FB_FORCE_RANK1   softmodem_params.ai_fb_force_rank1
+#define AI_FB_MODEL_PATH    softmodem_params.ai_fb_model_path
+#define AI_FB_MODEL_BACKEND softmodem_params.ai_fb_model_backend
+#define AI_FB_ONNX_ENC_PATH softmodem_params.ai_fb_onnx_enc_path
+#define AI_FB_ONNX_DEC_PATH softmodem_params.ai_fb_onnx_dec_path
+#define AI_FB_CSINET_MODEL_PATH softmodem_params.ai_fb_csinet_model_path
+#define AI_FB_CSINET_LATENT_BYTES softmodem_params.ai_fb_csinet_latent_bytes
+#define AI_FB_COMPARE_GATING softmodem_params.ai_fb_compare_gating
+#define AI_FB_COMPARE_MAX_AGE_SLOTS softmodem_params.ai_fb_compare_max_age_slots
+#define AI_FB_BUNDLED_ULSCH_ENABLE softmodem_params.ai_fb_bundled_ulsch_enable
+#define AI_FB_EFF_PMI_HYST softmodem_params.ai_fb_eff_pmi_hyst
+#define AI_FB_RUNTIME_SCHED_MODE softmodem_params.ai_fb_runtime_sched_mode
+#define AI_FB_RUNTIME_SCHED_MAX_AGE_SLOTS softmodem_params.ai_fb_runtime_sched_max_age_slots
+#define AI_FB_RUNTIME_SCHED_REQUIRE_FULL softmodem_params.ai_fb_runtime_sched_require_full
+#define AI_FB_RUNTIME_LOG_ENABLE softmodem_params.ai_fb_runtime_log_enable
+#define AI_FB_RUNTIME_LOG_PERIOD_FRAMES softmodem_params.ai_fb_runtime_log_period_frames
+#define SRS_IMSCOPE_LOG_ENABLE softmodem_params.srs_imscope_log_enable
+#define CSI_I2_HYST_THRESHOLD softmodem_params.csi_i2_hyst_threshold
+#define CSI_I2_HYST_WINDOW softmodem_params.csi_i2_hyst_window
 
 extern int usrp_tx_thread;
 // clang-format off
@@ -164,11 +192,41 @@ extern int usrp_tx_thread;
   {"A" ,                    CONFIG_HLP_TADV,          0,             .iptr=&softmodem_params.command_line_sample_advance,.defintval=0,            TYPE_INT,   0},  \
   {"E" ,                    CONFIG_HLP_TQFS,          PARAMFLAG_BOOL, .iptr=&softmodem_params.threequarter_fs, .defintval=0,            TYPE_INT,    0}, \
   {"imscope" ,              CONFIG_HLP_IMSCOPE,       PARAMFLAG_BOOL, .uptr=&enable_imscope,                   .defintval=0,            TYPE_UINT,   0}, \
+  {"imscope-windows" ,      CONFIG_HLP_IMSCOPE_WINDOWS, 0,           .strptr=&IMSCOPE_WINDOWS,                .defstrval=NULL,         TYPE_STRING, 0}, \
   {"imscope-record" ,       CONFIG_HLP_IMSCOPE_RECORD,PARAMFLAG_BOOL, .uptr=&enable_imscope_record,            .defintval=0,            TYPE_UINT,   0}, \
   {"default-pdu-id",        NULL,                     0,              .iptr=&DEFAULT_PDU_ID,                   .defintval=-1,           TYPE_INT,    0}, \
+  {"csi-record-path",      CONFIG_HLP_CSI_RECORD_GNB, 0,              .strptr=&CSI_RECORD_PATH,                .defstrval=NULL,         TYPE_STRING, 0}, \
+  {"dl-ri-use-decoded",    CONFIG_HLP_DL_RI_USE_DECODED, 0,           .iptr=&DL_RI_USE_DECODED,                .defintval=0,            TYPE_INT,    0}, \
+  {"print-csi-debug",     CONFIG_HLP_PRINT_CSI_DEBUG, PARAMFLAG_BOOL, .iptr=&PRINT_CSI_DEBUG,                .defintval=0,            TYPE_INT,    0}, \
+  {"ai-fb-ulsch-enable",  CONFIG_HLP_AI_FB_ULSCH_ENABLE, PARAMFLAG_BOOL, .iptr=&AI_FB_ULSCH_ENABLE,          .defintval=0,            TYPE_INT,    0}, \
+  {"ai-fb-log-path",      CONFIG_HLP_AI_FB_LOG_PATH, 0,               .strptr=&AI_FB_LOG_PATH,                .defstrval=NULL,         TYPE_STRING, 0}, \
+  {"ai-fb-impl-mode",     CONFIG_HLP_AI_FB_IMPL_MODE, 0,              .iptr=&AI_FB_IMPL_MODE,                 .defintval=0,            TYPE_INT,    0}, \
+  {"ai-fb-force-rank1",   CONFIG_HLP_AI_FB_FORCE_RANK1, PARAMFLAG_BOOL, .iptr=&AI_FB_FORCE_RANK1,            .defintval=0,            TYPE_INT,    0}, \
+  {"ai-fb-model-path",    CONFIG_HLP_AI_FB_MODEL_PATH, 0,             .strptr=&AI_FB_MODEL_PATH,              .defstrval=NULL,         TYPE_STRING, 0}, \
+  {"ai-fb-model-backend", CONFIG_HLP_AI_FB_MODEL_BACKEND, 0,          .iptr=&AI_FB_MODEL_BACKEND,             .defintval=0,            TYPE_INT,    0}, \
+  {"ai-fb-onnx-enc-path", CONFIG_HLP_AI_FB_ONNX_ENC_PATH, 0,          .strptr=&AI_FB_ONNX_ENC_PATH,           .defstrval=NULL,         TYPE_STRING, 0}, \
+  {"ai-fb-onnx-dec-path", CONFIG_HLP_AI_FB_ONNX_DEC_PATH, 0,          .strptr=&AI_FB_ONNX_DEC_PATH,           .defstrval=NULL,         TYPE_STRING, 0}, \
+  {"ai-fb-csinet-model-path", CONFIG_HLP_AI_FB_CSINET_MODEL_PATH, 0,  .strptr=&AI_FB_CSINET_MODEL_PATH,       .defstrval=NULL,         TYPE_STRING, 0}, \
+  {"ai-fb-csinet-latent-bytes", CONFIG_HLP_AI_FB_CSINET_LATENT_BYTES, 0, .iptr=&AI_FB_CSINET_LATENT_BYTES,   .defintval=6,            TYPE_INT,    0}, \
+  {"ai-fb-compare-gating", CONFIG_HLP_AI_FB_COMPARE_GATING, 0,        .iptr=&AI_FB_COMPARE_GATING,            .defintval=1,            TYPE_INT,    0}, \
+  {"ai-fb-compare-max-age-slots", CONFIG_HLP_AI_FB_COMPARE_MAX_AGE_SLOTS, 0, .iptr=&AI_FB_COMPARE_MAX_AGE_SLOTS, .defintval=2,         TYPE_INT,    0}, \
+  {"ai-fb-bundled-ulsch-enable", CONFIG_HLP_AI_FB_BUNDLED_ULSCH_ENABLE, PARAMFLAG_BOOL, .iptr=&AI_FB_BUNDLED_ULSCH_ENABLE, .defintval=0, TYPE_INT, 0}, \
+  {"ai-fb-eff-pmi-hyst", CONFIG_HLP_AI_FB_EFF_PMI_HYST, 0, .iptr=&AI_FB_EFF_PMI_HYST, .defintval=3, TYPE_INT, 0}, \
+  {"ai-fb-runtime-sched-mode", CONFIG_HLP_AI_FB_RUNTIME_SCHED_MODE, 0, .iptr=&AI_FB_RUNTIME_SCHED_MODE, .defintval=0, TYPE_INT, 0}, \
+  {"ai-fb-runtime-sched-max-age-slots", CONFIG_HLP_AI_FB_RUNTIME_SCHED_MAX_AGE_SLOTS, 0, .iptr=&AI_FB_RUNTIME_SCHED_MAX_AGE_SLOTS, .defintval=2, TYPE_INT, 0}, \
+  {"ai-fb-runtime-sched-require-full", CONFIG_HLP_AI_FB_RUNTIME_SCHED_REQUIRE_FULL, PARAMFLAG_BOOL, .iptr=&AI_FB_RUNTIME_SCHED_REQUIRE_FULL, .defintval=1, TYPE_INT, 0}, \
+  {"ai-fb-runtime-log-enable", CONFIG_HLP_AI_FB_RUNTIME_LOG_ENABLE, PARAMFLAG_BOOL, .iptr=&AI_FB_RUNTIME_LOG_ENABLE, .defintval=0, TYPE_INT, 0}, \
+  {"ai-fb-runtime-log-period-frames", CONFIG_HLP_AI_FB_RUNTIME_LOG_PERIOD_FRAMES, 0, .iptr=&AI_FB_RUNTIME_LOG_PERIOD_FRAMES, .defintval=100, TYPE_INT, 0}, \
+  {"srs-imscope-log-enable", CONFIG_HLP_SRS_IMSCOPE_LOG_ENABLE, PARAMFLAG_BOOL, .iptr=&SRS_IMSCOPE_LOG_ENABLE, .defintval=0, TYPE_INT, 0}, \
+  {"csi-i2-hyst-threshold", CONFIG_HLP_CSI_I2_HYST_THRESHOLD, 0, .iptr=&CSI_I2_HYST_THRESHOLD, .defintval=0, TYPE_INT, 0}, \
+  {"csi-i2-hyst-window", CONFIG_HLP_CSI_I2_HYST_WINDOW, 0, .iptr=&CSI_I2_HYST_WINDOW, .defintval=0, TYPE_INT, 0}, \
 }
 // clang-format on
 
+/* CMDLINE_PARAMS_CHECK_DESC: must have exactly as many entries as CMDLINE_PARAMS_DESC, in the same order.
+ * Entry i is the check for param i. Use { .s5 = { NULL } } for no check; the only non-NULL check here is
+ * .s3a for "nfapi" (param index 25). Wrong count → static_assert fail at build; wrong order → segfault in
+ * config_checkstr_assign_integer. See doc/SOFTMODEM_CMDLINE_PARAMS.md when adding params. */
 // clang-format off
 #define CMDLINE_PARAMS_CHECK_DESC {         \
     { .s5 = { NULL } },                     \
@@ -210,10 +268,60 @@ extern int usrp_tx_thread;
     { .s5 = { NULL } },                     \
     { .s5 = { NULL } },                     \
     { .s5 = { NULL } },                     \
+    { .s5 = { NULL } },                     \
+    { .s5 = { NULL } },                     \
+    { .s5 = { NULL } },                     \
+   { .s5 = { NULL } },                     \
+   { .s5 = { NULL } },                     \
+   { .s5 = { NULL } },                     \
+   { .s5 = { NULL } },                     \
+   { .s5 = { NULL } },                     \
+   { .s5 = { NULL } },                     \
+   { .s5 = { NULL } },                     \
+   { .s5 = { NULL } },                     \
+   { .s5 = { NULL } },                     \
+   { .s5 = { NULL } },                     \
+   { .s5 = { NULL } },                     \
+   { .s5 = { NULL } },                     \
+   { .s5 = { NULL } },                     \
+   { .s5 = { NULL } },                     \
+   { .s5 = { NULL } },                     \
+   { .s5 = { NULL } },                     \
+   { .s5 = { NULL } },                     \
+   { .s5 = { NULL } },                     \
+   { .s5 = { NULL } },                     \
+   { .s5 = { NULL } },                     \
+   { .s5 = { NULL } },                     \
+   { .s5 = { NULL } },                     \
+   { .s5 = { NULL } },                     \
 }
 // clang-format on
 
 #define CONFIG_HLP_NSA           "Enable NSA mode \n"
+#define CONFIG_HLP_DL_RI_USE_DECODED "DL RI policy selector: 0 = use capped/scheduled RI layers (default), 1 = use decoded RI layers directly\n"
+#define CONFIG_HLP_PRINT_CSI_DEBUG "Print CSI debug traces (RI/PMI/RX-estimator + gNB decode/policy) on terminal\n"
+#define CONFIG_HLP_AI_FB_ULSCH_ENABLE "Enable lab custom AI CSI feedback over UL-SCH LCID (legacy PUCCH CSI remains active)\n"
+#define CONFIG_HLP_AI_FB_LOG_PATH "Path to append AI-vs-legacy PMI comparison CSV at gNB (optional)\n"
+#define CONFIG_HLP_AI_FB_IMPL_MODE "AI feedback implementation mode: 0=matrix(default), 1=MLP stub, 2=model stub, 3=csinet, 4=angular-delay-mlp, 5=angular-delay-refinenet\n"
+#define CONFIG_HLP_AI_FB_FORCE_RANK1 "Force CSI RI restriction to rank-1 only for AI study mode (applied only when --ai-fb-ulsch-enable=1)\n"
+#define CONFIG_HLP_AI_FB_MODEL_PATH "Path to model-stub weights file (.bin preferred, .txt supported) used when --ai-fb-impl-mode=2\n"
+#define CONFIG_HLP_AI_FB_MODEL_BACKEND "Model-stub backend selector: 0=native loader, 1=ONNX stub, 2=TFLite stub\n"
+#define CONFIG_HLP_AI_FB_ONNX_ENC_PATH "Path to ONNX encoder model file (used when --ai-fb-impl-mode=2 --ai-fb-model-backend=1)\n"
+#define CONFIG_HLP_AI_FB_ONNX_DEC_PATH "Path to ONNX decoder model file (used when --ai-fb-impl-mode=2 --ai-fb-model-backend=1)\n"
+#define CONFIG_HLP_AI_FB_CSINET_MODEL_PATH "Path to CSINet model artifact for --ai-fb-impl-mode=3 (phase-1 optional placeholder)\n"
+#define CONFIG_HLP_AI_FB_CSINET_LATENT_BYTES "Requested CSINet latent payload bytes (phase-1 fixed transport budget is 6)\n"
+#define CONFIG_HLP_AI_FB_COMPARE_GATING "Enable freshness gating for legacy-vs-custom PMI comparison: 0=off, 1=on\n"
+#define CONFIG_HLP_AI_FB_COMPARE_MAX_AGE_SLOTS "Max slot age allowed for compare gating (used when --ai-fb-compare-gating=1)\n"
+#define CONFIG_HLP_AI_FB_BUNDLED_ULSCH_ENABLE "Enable bundled UL-SCH MAC CE carrying legacy CSI part1 raw bits + AI latent from same UE observation\n"
+#define CONFIG_HLP_AI_FB_EFF_PMI_HYST "Bundled compare analysis-only debounced PMI hysteresis threshold (consecutive opposite samples before switch)\n"
+#define CONFIG_HLP_AI_FB_RUNTIME_SCHED_MODE "AI runtime DL scheduling mode: 0=off, 1=use fresh bundled AI tuple for RI/PMI/CQI with fallback, 2=legacy-CSI-payload-replaced-by-AI mode\n"
+#define CONFIG_HLP_AI_FB_RUNTIME_SCHED_MAX_AGE_SLOTS "Max slot age for AI tuple freshness in runtime scheduling modes 1/2\n"
+#define CONFIG_HLP_AI_FB_RUNTIME_SCHED_REQUIRE_FULL "Require AI RI+PMI+CQI tuple to all be present before overriding scheduling (1=yes,0=no)\n"
+#define CONFIG_HLP_AI_FB_RUNTIME_LOG_ENABLE "Enable periodic AI runtime scheduling logs independent from --print-csi-debug: 0=off, 1=on\n"
+#define CONFIG_HLP_AI_FB_RUNTIME_LOG_PERIOD_FRAMES "Periodicity (in frames) for AI runtime scheduling debug logs; 0 disables periodic logs\n"
+#define CONFIG_HLP_SRS_IMSCOPE_LOG_ENABLE "Enable SRS/imscope-related logs in gNB PHY scheduling path: 0=disable, 1=enable\n"
+#define CONFIG_HLP_CSI_I2_HYST_THRESHOLD "UE CSI 2-port rank-2 i2 hysteresis threshold (consecutive opposite filtered decisions before effective i2 switch); 0 disables\n"
+#define CONFIG_HLP_CSI_I2_HYST_WINDOW "UE CSI 2-port rank-2 i2 majority window size over raw decisions before hysteresis; 0/1 disables\n"
 #define CONFIG_HLP_FLOG          "Enable online log \n"
 #define CONFIG_HLP_LOGL          "Set the global log level, valid options: (4:trace, 3:debug, 2:info, 1:warn, (0:error))\n"
 #define CONFIG_HLP_TELN          "Start embedded telnet server \n"
@@ -318,6 +426,32 @@ typedef struct {
   int threequarter_fs;
   int default_pdu_session_id;
   int extra_pdu_session_id;
+  char *csi_record_path;  /* gNB: record CSI-RS scheduling + decoded CSI feedback when set */
+  char *imscope_windows;   /* NULL = show all; else comma-separated list of window titles to show when --imscope is used */
+  int dl_ri_use_decoded;   /* gNB DL scheduler: 0=capped RI, 1=decoded RI */
+  int print_csi_debug;   /* Print extra CSI-related debug traces on terminal */
+  int ai_fb_ulsch_enable; /* Enable custom AI CSI latent over UL-SCH lab path */
+  char *ai_fb_log_path;   /* Optional CSV output for AI-vs-legacy PMI comparison */
+  int ai_fb_impl_mode;    /* AI FB module implementation selector */
+  int ai_fb_force_rank1;  /* Gate rank-1 RI restriction for AI study mode */
+  char *ai_fb_model_path; /* Optional model-stub weights file path */
+  int ai_fb_model_backend; /* 0=native, 1=ONNX stub, 2=TFLite stub */
+  char *ai_fb_onnx_enc_path; /* Optional ONNX encoder model path */
+  char *ai_fb_onnx_dec_path; /* Optional ONNX decoder model path */
+  char *ai_fb_csinet_model_path; /* Optional CSINet model path */
+  int ai_fb_csinet_latent_bytes; /* Requested CSINet latent payload bytes */
+  int ai_fb_compare_gating; /* Gate compare stats by custom PMI freshness */
+  int ai_fb_compare_max_age_slots; /* Max age (slots) for fresh compare */
+  int ai_fb_bundled_ulsch_enable; /* Enable bundled legacy+AI UL-SCH MAC CE path */
+  int ai_fb_eff_pmi_hyst; /* Analysis-only effective PMI hysteresis threshold */
+  int ai_fb_runtime_sched_mode; /* 0=off,1=bundled override,2=legacy payload replaced by AI */
+  int ai_fb_runtime_sched_max_age_slots; /* Freshness for runtime AI scheduling */
+  int ai_fb_runtime_sched_require_full; /* Require full AI tuple before override */
+  int ai_fb_runtime_log_enable; /* Enable periodic runtime selector logs */
+  int ai_fb_runtime_log_period_frames; /* Periodicity of runtime selector logs */
+  int srs_imscope_log_enable; /* Print SRS/imscope visualization logs */
+  int csi_i2_hyst_threshold; /* UE-side hysteresis for 2-port rank-2 i2 */
+  int csi_i2_hyst_window; /* UE-side majority window for 2-port rank-2 i2 */
 } softmodem_params_t;
 
 #define IS_SA_MODE(sM_params) (!(sM_params)->phy_test && !(sM_params)->do_ra && !(sM_params)->nsa)

@@ -380,56 +380,89 @@ static int set_ideal_period(bool is_csi)
   return is_csi ? MAX_MOBILES_PER_GNB * 2 * nb_slots_per_period / n_ul_slots_per_period : nb_slots_per_period * MAX_MOBILES_PER_GNB;
 }
 
+/** Standard NZP-CSI-RS periodicities in slots (3GPP 38.331). Minimum is 4. */
+static const int csirs_standard_periods[] = {4, 5, 8, 10, 16, 20, 40, 80, 160, 320};
+static const int csirs_standard_periods_num = sizeof(csirs_standard_periods) / sizeof(csirs_standard_periods[0]);
+
 static void set_csirs_periodicity(NR_NZP_CSI_RS_Resource_t *nzpcsi0,
                                   int id,
                                   int ideal_period,
+                                  int configured_period_slots,
+                                  int configured_slot_offset,
                                   const frame_structure_t *fs)
 {
   nzpcsi0->periodicityAndOffset = calloc(1,sizeof(*nzpcsi0->periodicityAndOffset));
-  // TODO ideal period to be set according to estimation by the gNB on how fast the channel changes
-  const int offset = id; // id = ssb_index/2, offset should be set to ssb_index/2.
-  if (check_periodicity(4, ideal_period, fs)) {
+  const int default_offset = id; // current default behavior: id = ssb_index/2
+  int period_to_use = ideal_period;
+  if (configured_period_slots > 0) {
+    for (int i = 0; i < csirs_standard_periods_num; i++) {
+      if (csirs_standard_periods[i] >= configured_period_slots && check_periodicity(csirs_standard_periods[i], 0, fs)) {
+        period_to_use = csirs_standard_periods[i];
+        break;
+      }
+    }
+    if (period_to_use == ideal_period) {
+      for (int i = csirs_standard_periods_num - 1; i >= 0; i--) {
+        if (csirs_standard_periods[i] <= configured_period_slots && check_periodicity(csirs_standard_periods[i], 0, fs)) {
+          period_to_use = csirs_standard_periods[i];
+          break;
+        }
+      }
+    }
+  }
+  int offset_to_use = default_offset;
+  if (configured_slot_offset >= 0) {
+    if (configured_slot_offset >= period_to_use) {
+      LOG_W(NR_MAC,
+            "CSI_RS_slot_offset=%d >= periodicity=%d: applying modulo (offset=%d)\n",
+            configured_slot_offset,
+            period_to_use,
+            configured_slot_offset % period_to_use);
+    }
+    offset_to_use = configured_slot_offset % period_to_use;
+  }
+  if (check_periodicity(4, period_to_use, fs)) {
     nzpcsi0->periodicityAndOffset->present = NR_CSI_ResourcePeriodicityAndOffset_PR_slots4;
-    nzpcsi0->periodicityAndOffset->choice.slots4 = offset;
+    nzpcsi0->periodicityAndOffset->choice.slots4 = offset_to_use % 4;
   }
-  else if (check_periodicity(5, ideal_period, fs)) {
+  else if (check_periodicity(5, period_to_use, fs)) {
     nzpcsi0->periodicityAndOffset->present = NR_CSI_ResourcePeriodicityAndOffset_PR_slots5;
-    nzpcsi0->periodicityAndOffset->choice.slots5 = offset;
+    nzpcsi0->periodicityAndOffset->choice.slots5 = offset_to_use % 5;
   }
-  else if (check_periodicity(8, ideal_period, fs)) {
+  else if (check_periodicity(8, period_to_use, fs)) {
     nzpcsi0->periodicityAndOffset->present = NR_CSI_ResourcePeriodicityAndOffset_PR_slots8;
-    nzpcsi0->periodicityAndOffset->choice.slots8 = offset;
+    nzpcsi0->periodicityAndOffset->choice.slots8 = offset_to_use % 8;
   }
-  else if (check_periodicity(10, ideal_period, fs)) {
+  else if (check_periodicity(10, period_to_use, fs)) {
     nzpcsi0->periodicityAndOffset->present = NR_CSI_ResourcePeriodicityAndOffset_PR_slots10;
-    nzpcsi0->periodicityAndOffset->choice.slots10 = offset;
+    nzpcsi0->periodicityAndOffset->choice.slots10 = offset_to_use % 10;
   }
-  else if (check_periodicity(16, ideal_period, fs)) {
+  else if (check_periodicity(16, period_to_use, fs)) {
     nzpcsi0->periodicityAndOffset->present = NR_CSI_ResourcePeriodicityAndOffset_PR_slots16;
-    nzpcsi0->periodicityAndOffset->choice.slots16 = offset;
+    nzpcsi0->periodicityAndOffset->choice.slots16 = offset_to_use % 16;
   }
-  else if (check_periodicity(20, ideal_period, fs)) {
+  else if (check_periodicity(20, period_to_use, fs)) {
     nzpcsi0->periodicityAndOffset->present = NR_CSI_ResourcePeriodicityAndOffset_PR_slots20;
-    nzpcsi0->periodicityAndOffset->choice.slots20 = offset;
+    nzpcsi0->periodicityAndOffset->choice.slots20 = offset_to_use % 20;
   }
-  else if (check_periodicity(40, ideal_period, fs)) {
+  else if (check_periodicity(40, period_to_use, fs)) {
     nzpcsi0->periodicityAndOffset->present = NR_CSI_ResourcePeriodicityAndOffset_PR_slots40;
-    nzpcsi0->periodicityAndOffset->choice.slots40 = offset;
+    nzpcsi0->periodicityAndOffset->choice.slots40 = offset_to_use % 40;
   }
-  else if (check_periodicity(80, ideal_period, fs)) {
+  else if (check_periodicity(80, period_to_use, fs)) {
     nzpcsi0->periodicityAndOffset->present = NR_CSI_ResourcePeriodicityAndOffset_PR_slots80;
-    nzpcsi0->periodicityAndOffset->choice.slots80 = offset;
+    nzpcsi0->periodicityAndOffset->choice.slots80 = offset_to_use % 80;
   }
-  else if (check_periodicity(160, ideal_period, fs)) {
+  else if (check_periodicity(160, period_to_use, fs)) {
     nzpcsi0->periodicityAndOffset->present = NR_CSI_ResourcePeriodicityAndOffset_PR_slots160;
-    nzpcsi0->periodicityAndOffset->choice.slots160 = offset;
+    nzpcsi0->periodicityAndOffset->choice.slots160 = offset_to_use % 160;
   }
   else {
     nzpcsi0->periodicityAndOffset->present = NR_CSI_ResourcePeriodicityAndOffset_PR_slots320;
     const int nb_dl_slots_period = get_full_dl_slots_per_period(fs); // full DL slots
     // checked for validity in verify_radio_configuration
-    AssertFatal(offset / 320 < nb_dl_slots_period, "Cannot allocate CSI-RS for BWP %d. Not enough resources for CSI-RS\n", id);
-    nzpcsi0->periodicityAndOffset->choice.slots320 = (offset % 320) + (offset / 320);
+    AssertFatal(offset_to_use / 320 < nb_dl_slots_period, "Cannot allocate CSI-RS for BWP %d. Not enough resources for CSI-RS\n", id);
+    nzpcsi0->periodicityAndOffset->choice.slots320 = (offset_to_use % 320) + (offset_to_use / 320);
   }
 }
 
@@ -438,7 +471,9 @@ static void config_csirs(const NR_ServingCellConfigCommon_t *servingcellconfigco
                          int num_dl_antenna_ports,
                          int curr_bwp,
                          int do_csirs,
-                         int id)
+                         int id,
+                         int csi_rs_periodicity_slots,
+                         int csi_rs_slot_offset)
 {
   if (do_csirs) {
 
@@ -522,7 +557,7 @@ static void config_csirs(const NR_ServingCellConfigCommon_t *servingcellconfigco
 
     const int ideal_period = set_ideal_period(true); // same periodicity as CSI measurement report
     const frame_structure_t *fs = &(RC.nrmac[0]->frame_structure);
-    set_csirs_periodicity(nzpcsi0, id, ideal_period, fs);
+    set_csirs_periodicity(nzpcsi0, id, ideal_period, csi_rs_periodicity_slots, csi_rs_slot_offset, fs);
 
     nzpcsi0->qcl_InfoPeriodicCSI_RS = calloc(1,sizeof(*nzpcsi0->qcl_InfoPeriodicCSI_RS));
     *nzpcsi0->qcl_InfoPeriodicCSI_RS = 0;
@@ -679,69 +714,91 @@ static void set_dl_maxmimolayers(NR_PDSCH_ServingCellConfig_t *pdsch_servingcell
     *pdsch_servingcellconfig->ext1->maxMIMO_Layers = min(maxMIMO_layers, ue_supported_layers);
 }
 
+/** Standard periodic SRS periodicities in slots (3GPP 38.331). Minimum is 4. */
+static const int srs_standard_periods[] = {4, 5, 8, 10, 16, 20, 32, 40, 64, 80, 160, 320, 640, 1280, 2560};
+static const int srs_standard_periods_num = sizeof(srs_standard_periods) / sizeof(srs_standard_periods[0]);
+
 static struct NR_SRS_Resource__resourceType__periodic *configure_periodic_srs(const NR_ServingCellConfigCommon_t *scc,
-                                                                              const int uid)
+                                                                              const int uid,
+                                                                              int configured_period_slots)
 {
   frame_structure_t *fs = &RC.nrmac[0]->frame_structure;
   int offset = get_ul_slot_offset(fs, uid, false); // only full UL slots for SRS
   // checked for validity in verify_radio_configuration
   AssertFatal(offset < 2560, "Cannot allocate SRS configuration for uid %d, not enough resources\n", uid);
   const int ideal_period = set_ideal_period(false);
+  int period_to_use = ideal_period;
+  if (configured_period_slots > 0) {
+    for (int i = 0; i < srs_standard_periods_num; i++) {
+      if (srs_standard_periods[i] >= configured_period_slots && check_periodicity(srs_standard_periods[i], 0, fs)) {
+        period_to_use = srs_standard_periods[i];
+        break;
+      }
+    }
+    if (period_to_use == ideal_period) {
+      for (int i = srs_standard_periods_num - 1; i >= 0; i--) {
+        if (srs_standard_periods[i] <= configured_period_slots && check_periodicity(srs_standard_periods[i], 0, fs)) {
+          period_to_use = srs_standard_periods[i];
+          break;
+        }
+      }
+    }
+  }
 
   struct NR_SRS_Resource__resourceType__periodic *periodic_srs = calloc(1,sizeof(*periodic_srs));
-  if (check_periodicity(4, ideal_period, fs)) {
+  if (check_periodicity(4, period_to_use, fs)) {
     periodic_srs->periodicityAndOffset_p.present = NR_SRS_PeriodicityAndOffset_PR_sl4;
     periodic_srs->periodicityAndOffset_p.choice.sl4 = offset;
   }
-  else if (check_periodicity(5, ideal_period, fs)) {
+  else if (check_periodicity(5, period_to_use, fs)) {
     periodic_srs->periodicityAndOffset_p.present = NR_SRS_PeriodicityAndOffset_PR_sl5;
     periodic_srs->periodicityAndOffset_p.choice.sl5 = offset;
   }
-  else if (check_periodicity(8, ideal_period, fs)) {
+  else if (check_periodicity(8, period_to_use, fs)) {
     periodic_srs->periodicityAndOffset_p.present = NR_SRS_PeriodicityAndOffset_PR_sl8;
     periodic_srs->periodicityAndOffset_p.choice.sl8 = offset;
   }
-  else if (check_periodicity(10, ideal_period, fs)) {
+  else if (check_periodicity(10, period_to_use, fs)) {
     periodic_srs->periodicityAndOffset_p.present = NR_SRS_PeriodicityAndOffset_PR_sl10;
     periodic_srs->periodicityAndOffset_p.choice.sl10 = offset;
   }
-  else if (check_periodicity(16, ideal_period, fs)) {
+  else if (check_periodicity(16, period_to_use, fs)) {
     periodic_srs->periodicityAndOffset_p.present = NR_SRS_PeriodicityAndOffset_PR_sl16;
     periodic_srs->periodicityAndOffset_p.choice.sl16 = offset;
   }
-  else if (check_periodicity(20, ideal_period, fs)) {
+  else if (check_periodicity(20, period_to_use, fs)) {
     periodic_srs->periodicityAndOffset_p.present = NR_SRS_PeriodicityAndOffset_PR_sl20;
     periodic_srs->periodicityAndOffset_p.choice.sl20 = offset;
   }
-  else if (check_periodicity(32, ideal_period, fs)) {
+  else if (check_periodicity(32, period_to_use, fs)) {
     periodic_srs->periodicityAndOffset_p.present = NR_SRS_PeriodicityAndOffset_PR_sl32;
     periodic_srs->periodicityAndOffset_p.choice.sl32 = offset;
   }
-  else if (check_periodicity(40, ideal_period, fs)) {
+  else if (check_periodicity(40, period_to_use, fs)) {
     periodic_srs->periodicityAndOffset_p.present = NR_SRS_PeriodicityAndOffset_PR_sl40;
     periodic_srs->periodicityAndOffset_p.choice.sl40 = offset;
   }
-  else if (check_periodicity(64, ideal_period, fs)) {
+  else if (check_periodicity(64, period_to_use, fs)) {
     periodic_srs->periodicityAndOffset_p.present = NR_SRS_PeriodicityAndOffset_PR_sl64;
     periodic_srs->periodicityAndOffset_p.choice.sl64 = offset;
   }
-  else if (check_periodicity(80, ideal_period, fs)) {
+  else if (check_periodicity(80, period_to_use, fs)) {
     periodic_srs->periodicityAndOffset_p.present = NR_SRS_PeriodicityAndOffset_PR_sl80;
     periodic_srs->periodicityAndOffset_p.choice.sl80 = offset;
   }
-  else if (check_periodicity(160, ideal_period, fs)) {
+  else if (check_periodicity(160, period_to_use, fs)) {
     periodic_srs->periodicityAndOffset_p.present = NR_SRS_PeriodicityAndOffset_PR_sl160;
     periodic_srs->periodicityAndOffset_p.choice.sl160 = offset;
   }
-  else if (check_periodicity(320, ideal_period, fs)) {
+  else if (check_periodicity(320, period_to_use, fs)) {
     periodic_srs->periodicityAndOffset_p.present = NR_SRS_PeriodicityAndOffset_PR_sl320;
     periodic_srs->periodicityAndOffset_p.choice.sl320 = offset;
   }
-  else if (check_periodicity(640, ideal_period, fs)) {
+  else if (check_periodicity(640, period_to_use, fs)) {
     periodic_srs->periodicityAndOffset_p.present = NR_SRS_PeriodicityAndOffset_PR_sl640;
     periodic_srs->periodicityAndOffset_p.choice.sl640 = offset;
   }
-  else if (check_periodicity(1280, ideal_period, fs)) {
+  else if (check_periodicity(1280, period_to_use, fs)) {
     periodic_srs->periodicityAndOffset_p.present = NR_SRS_PeriodicityAndOffset_PR_sl1280;
     periodic_srs->periodicityAndOffset_p.choice.sl1280 = offset;
   }
@@ -795,7 +852,8 @@ static NR_SRS_Resource_t *get_srs_resource(const NR_ServingCellConfigCommon_t *s
                                            const int res_id,
                                            const long maxMIMO_Layers,
                                            const NR_SRS_Resource__transmissionComb_PR tx_comb,
-                                           int do_srs)
+                                           int do_srs,
+                                           int srs_periodicity_slots)
 {
   NR_SRS_Resource_t *srs_res = calloc_or_fail(1, sizeof(*srs_res));
   srs_res->srs_ResourceId = res_id;
@@ -866,7 +924,7 @@ static NR_SRS_Resource_t *get_srs_resource(const NR_ServingCellConfigCommon_t *s
   srs_res->groupOrSequenceHopping = NR_SRS_Resource__groupOrSequenceHopping_neither;
   if (do_srs) {
     srs_res->resourceType.present = NR_SRS_Resource__resourceType_PR_periodic;
-    srs_res->resourceType.choice.periodic = configure_periodic_srs(scc, uid);
+    srs_res->resourceType.choice.periodic = configure_periodic_srs(scc, uid, srs_periodicity_slots);
   } else {
     srs_res->resourceType.present = NR_SRS_Resource__resourceType_PR_aperiodic;
     srs_res->resourceType.choice.aperiodic = calloc_or_fail(1, sizeof(*srs_res->resourceType.choice.aperiodic));
@@ -887,7 +945,8 @@ static NR_SetupRelease_SRS_Config_t *get_config_srs(const NR_ServingCellConfigCo
                                                     const int res_id,
                                                     const long maxMIMO_Layers,
                                                     const int minRXTXTIME,
-                                                    int do_srs)
+                                                    int do_srs,
+                                                    int srs_periodicity_slots)
 {
   NR_SetupRelease_SRS_Config_t *setup_release_srs_Config = calloc_or_fail(1, sizeof(*setup_release_srs_Config));
   setup_release_srs_Config->present = NR_SetupRelease_SRS_Config_PR_setup;
@@ -896,7 +955,7 @@ static NR_SetupRelease_SRS_Config_t *get_config_srs(const NR_ServingCellConfigCo
 
   srs_Config->srs_ResourceToAddModList = calloc_or_fail(1, sizeof(*srs_Config->srs_ResourceToAddModList));
   NR_SRS_Resource_t *srs_res0 =
-      get_srs_resource(scc, uecap, curr_bwp, uid, res_id, maxMIMO_Layers, NR_SRS_Resource__transmissionComb_PR_n2, do_srs);
+      get_srs_resource(scc, uecap, curr_bwp, uid, res_id, maxMIMO_Layers, NR_SRS_Resource__transmissionComb_PR_n2, do_srs, srs_periodicity_slots);
   asn1cSeqAdd(&srs_Config->srs_ResourceToAddModList->list, srs_res0);
 
   srs_Config->srs_ResourceSetToAddModList = calloc_or_fail(1, sizeof(*srs_Config->srs_ResourceSetToAddModList));
@@ -1283,7 +1342,7 @@ static void config_pucch_resset1(const NR_ServingCellConfigCommon_t *scc,
   pucchres2->format.present = NR_PUCCH_Resource__format_PR_format2;
   pucchres2->format.choice.format2 = calloc(1,sizeof(*pucchres2->format.choice.format2));
   pucchres2->format.choice.format2->nrofPRBs = pucch2_size;
-  pucchres2->format.choice.format2->nrofSymbols = 1;
+  pucchres2->format.choice.format2->nrofSymbols = 2;
   pucchres2->format.choice.format2->startingSymbolIndex = 13;
   asn1cSeqAdd(&pucch_Config->resourceToAddModList->list,pucchres2);
 
@@ -1296,7 +1355,7 @@ static void config_pucch_resset1(const NR_ServingCellConfigCommon_t *scc,
   pucchfmt2->interslotFrequencyHopping = NULL;
   pucchfmt2->additionalDMRS = NULL;
   pucchfmt2->maxCodeRate = calloc(1,sizeof(*pucchfmt2->maxCodeRate));
-  *pucchfmt2->maxCodeRate = NR_PUCCH_MaxCodeRate_zeroDot15;
+  *pucchfmt2->maxCodeRate = NR_PUCCH_MaxCodeRate_zeroDot25;
   pucchfmt2->nrofSlots = NULL;
   pucchfmt2->pi2BPSK = NULL;
 
@@ -1532,7 +1591,7 @@ static NR_PTRS_UplinkConfig_t *config_ulptrs(const nr_ptrs_config_t *ptrs)
   }
   AssertFatal(ptrs->ul_MaxPorts_0 == 0 || ptrs->ul_MaxPorts_0 == 1, "Invalid ul_MaxPorts_0 %d\n", ptrs->ul_MaxPorts_0);
   ptrs_config->maxNrofPorts = ptrs->ul_MaxPorts_0;
-  AssertFatal(ptrs->ul_Power_0 >= 0 || ptrs->ul_Power_0 < 4, "Invalid ul_Power_0 %d\n", ptrs->ul_Power_0);
+  AssertFatal(ptrs->ul_Power_0 >= 0 && ptrs->ul_Power_0 < 4, "Invalid ul_Power_0 %d (expected 0..3)\n", ptrs->ul_Power_0);
   ptrs_config->ptrs_Power = ptrs->ul_Power_0;
 
   NR_PTRS_UplinkConfig_t *ulptrs = calloc_or_fail(1, sizeof(*ptrs_config));
@@ -1928,7 +1987,8 @@ static NR_BWP_Uplink_t *config_uplinkBWP(bool is_SA,
                                                    ubwp->bwp_Id,
                                                    maxMIMO_Layers,
                                                    configuration->minRXTXTIME,
-                                                   configuration->do_SRS);
+                                                   configuration->do_SRS,
+                                                   configuration->srs_periodicity_slots);
 
   ubwp->bwp_Dedicated->configuredGrantConfig = NULL;
   ubwp->bwp_Dedicated->beamFailureRecoveryConfig = NULL;
@@ -2006,10 +2066,21 @@ static void config_csi_codebook(const nr_pdsch_AntennaPorts_t *antennaports,
   if(!codebookConfig->codebookType.choice.type1->subType.choice.typeI_SinglePanel)
     codebookConfig->codebookType.choice.type1->subType.choice.typeI_SinglePanel = calloc(1, sizeof(*codebookConfig->codebookType.choice.type1->subType.choice.typeI_SinglePanel));
   struct NR_CodebookConfig__codebookType__type1__subType__typeI_SinglePanel *singlePanelConfig = codebookConfig->codebookType.choice.type1->subType.choice.typeI_SinglePanel;
+  int ri_layers = max_layers;
+  /*
+   * Optional AI study mode: rank-1 restriction is applied only when both:
+   *   --ai-fb-ulsch-enable=1 and --ai-fb-force-rank1=1
+   * Default behavior remains multi-rank.
+   */
+  const bool force_rank1 = get_softmodem_params()->ai_fb_ulsch_enable && get_softmodem_params()->ai_fb_force_rank1;
+  if (force_rank1)
+    ri_layers = 1;
+  ri_layers = min(ri_layers, num_ant_ports);
+  ri_layers = max(ri_layers, 1);
   singlePanelConfig->typeI_SinglePanel_ri_Restriction.size = 1;
   singlePanelConfig->typeI_SinglePanel_ri_Restriction.bits_unused = 0;
   singlePanelConfig->typeI_SinglePanel_ri_Restriction.buf = malloc(1);
-  singlePanelConfig->typeI_SinglePanel_ri_Restriction.buf[0] = (1 << max_layers) - 1; // max_layers bit set to 1
+  singlePanelConfig->typeI_SinglePanel_ri_Restriction.buf[0] = (1 << ri_layers) - 1; // enable RI candidates up to ri_layers
   if (num_ant_ports == 2) {
     singlePanelConfig->nrOfAntennaPorts.present = NR_CodebookConfig__codebookType__type1__subType__typeI_SinglePanel__nrOfAntennaPorts_PR_two;
     if(!singlePanelConfig->nrOfAntennaPorts.choice.two) {
@@ -2025,11 +2096,23 @@ static void config_csi_codebook(const nr_pdsch_AntennaPorts_t *antennaports,
       struct NR_CodebookConfig__codebookType__type1__subType__typeI_SinglePanel__nrOfAntennaPorts__moreThanTwo *moreThanTwo = singlePanelConfig->nrOfAntennaPorts.choice.moreThanTwo;
       switch (num_ant_ports) {
         case 4:
-          moreThanTwo->n1_n2.present = NR_CodebookConfig__codebookType__type1__subType__typeI_SinglePanel__nrOfAntennaPorts__moreThanTwo__n1_n2_PR_two_one_TypeI_SinglePanel_Restriction;
-          moreThanTwo->n1_n2.choice.two_one_TypeI_SinglePanel_Restriction.size = 1;
-          moreThanTwo->n1_n2.choice.two_one_TypeI_SinglePanel_Restriction.bits_unused = 0;
-          // TODO verify the meaning of this parameter
-          asn1cCallocOne(moreThanTwo->n1_n2.choice.two_one_TypeI_SinglePanel_Restriction.buf, 0xff);
+          /* (N1,N2,XP)=(2,2,1): four co-polarized ports on a 2×2 UPA — use two-two codebook mapping so PMI bit
+           * lengths match init_DL_MIMO_codebook (N1=2,N2=2). Otherwise keep two-one (e.g. four ports on a 4×1 line). */
+          if (antennaports->N1 == 2 && antennaports->N2 == 2 && antennaports->XP == 1) {
+            moreThanTwo->n1_n2.present =
+                NR_CodebookConfig__codebookType__type1__subType__typeI_SinglePanel__nrOfAntennaPorts__moreThanTwo__n1_n2_PR_two_two_TypeI_SinglePanel_Restriction;
+            moreThanTwo->n1_n2.choice.two_two_TypeI_SinglePanel_Restriction.size = 4;
+            moreThanTwo->n1_n2.choice.two_two_TypeI_SinglePanel_Restriction.bits_unused = 0;
+            moreThanTwo->n1_n2.choice.two_two_TypeI_SinglePanel_Restriction.buf = calloc(4, sizeof(uint8_t));
+            for (int i = 0; i < 4; i++)
+              moreThanTwo->n1_n2.choice.two_two_TypeI_SinglePanel_Restriction.buf[i] = 0xff;
+          } else {
+            moreThanTwo->n1_n2.present =
+                NR_CodebookConfig__codebookType__type1__subType__typeI_SinglePanel__nrOfAntennaPorts__moreThanTwo__n1_n2_PR_two_one_TypeI_SinglePanel_Restriction;
+            moreThanTwo->n1_n2.choice.two_one_TypeI_SinglePanel_Restriction.size = 1;
+            moreThanTwo->n1_n2.choice.two_one_TypeI_SinglePanel_Restriction.bits_unused = 0;
+            asn1cCallocOne(moreThanTwo->n1_n2.choice.two_one_TypeI_SinglePanel_Restriction.buf, 0xff);
+          }
           break;
         case 8:
           if (antennaports->N1 == 2) {
@@ -3367,7 +3450,7 @@ static NR_BWP_UplinkDedicated_t *configure_initial_ul_bwp(const NR_ServingCellCo
   initialUplinkBWP->pusch_Config = config_pusch(configuration, scc, uecap);
 
   // We are using do_srs = 0 here because the periodic SRS will only be enabled in update_cellGroupConfig() if do_srs == 1
-  initialUplinkBWP->srs_Config = get_config_srs(scc, uecap, curr_bwp, id, 0, maxMIMO_Layers, configuration->minRXTXTIME, 0);
+  initialUplinkBWP->srs_Config = get_config_srs(scc, uecap, curr_bwp, id, 0, maxMIMO_Layers, configuration->minRXTXTIME, 0, 0);
 
   scheduling_request_config(scc, pucch_Config, scc->uplinkConfigCommon->initialUplinkBWP->genericParameters.subcarrierSpacing);
   set_dl_DataToUL_ACK(pucch_Config, configuration->minRXTXTIME, genericParameters->subcarrierSpacing);
@@ -3465,7 +3548,14 @@ static NR_CSI_MeasConfig_t *get_csiMeasConfig(const NR_ServingCellConfig_t *conf
 
   const int pdsch_AntennaPorts =
       configuration->pdsch_AntennaPorts.N1 * configuration->pdsch_AntennaPorts.N2 * configuration->pdsch_AntennaPorts.XP;
-  config_csirs(scc, csi_MeasConfig, pdsch_AntennaPorts, curr_bwp, configuration->do_CSIRS, ssb_index / 2);
+  config_csirs(scc,
+               csi_MeasConfig,
+               pdsch_AntennaPorts,
+               curr_bwp,
+               configuration->do_CSIRS,
+               ssb_index / 2,
+               configuration->csi_rs_periodicity_slots,
+               configuration->csi_rs_slot_offset);
   config_csiim(configuration->do_CSIRS, pdsch_AntennaPorts, curr_bwp, csi_MeasConfig, ssb_index / 2);
 
   NR_CSI_ResourceConfig_t *csires1 = calloc(1, sizeof(*csires1));
@@ -3998,7 +4088,8 @@ void update_cellGroupConfig(NR_CellGroupConfig_t *cellGroupConfig,
                                                     bwp_id,
                                                     maxMIMO_Layers,
                                                     configuration->minRXTXTIME,
-                                                    configuration->do_SRS);
+                                                    configuration->do_SRS,
+                                                    configuration->srs_periodicity_slots);
     }
     set_ul_mcs_table(configuration->force_UL256qam_off ? NULL : uecap, scc, pusch_Config);
   }
@@ -4123,7 +4214,8 @@ NR_CellGroupConfig_t *get_default_secondaryCellGroup(const NR_ServingCellConfigC
                                                 0,
                                                 maxMIMO_Layers,
                                                 configuration->minRXTXTIME,
-                                                configuration->do_SRS);
+                                                configuration->do_SRS,
+                                                configuration->srs_periodicity_slots);
 
   // Downlink BWPs
   int firstActiveDownlinkBWP_Id = 1;

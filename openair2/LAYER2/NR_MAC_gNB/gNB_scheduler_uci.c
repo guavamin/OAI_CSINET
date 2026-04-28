@@ -26,12 +26,37 @@
  * \company Eurecom
  */
 
+#include <errno.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/time.h>
+
 #include <softmodem-common.h>
 #include "NR_MAC_gNB/nr_mac_gNB.h"
 #include "NR_MAC_gNB/mac_proto.h"
 #include "common/ran_context.h"
 #include "common/utils/nr/nr_common.h"
 #include "nfapi/oai_integration/vendor_ext.h"
+#include "openair1/PHY/TOOLS/phy_scope_interface.h"
+#include "openair2/LAYER2/NR_MAC_gNB/ai_fb_decoder.h"
+#include "openair2/LAYER2/NR_MAC_gNB/csinet_decoder.h"
+
+/* gNB decoded CSI feedback recording for monitoring */
+static pthread_mutex_t gnb_csi_feedback_mutex = PTHREAD_MUTEX_INITIALIZER;
+static int gnb_csi_feedback_csv_header_done = 0;
+static pthread_mutex_t gnb_ai_fb_mutex = PTHREAD_MUTEX_INITIALIZER;
+static int gnb_ai_fb_csv_header_done = 0;
+
+static void extract_pucch_csi_report(NR_CSI_MeasConfig_t *csi_MeasConfig,
+                                     const nfapi_nr_uci_pucch_pdu_format_2_3_4_t *uci_pdu,
+                                     frame_t frame,
+                                     slot_t slot,
+                                     NR_UE_info_t *UE,
+                                     gNB_MAC_INST *nrmac);
+
 static void nr_fill_nfapi_pucch(gNB_MAC_INST *nrmac, frame_t frame, slot_t slot, const NR_sched_pucch_t *pucch, NR_UE_info_t* UE)
 {
 
@@ -607,6 +632,25 @@ static int evaluate_ri_report(uint8_t *payload,
                               int cumul_bits,
                               NR_UE_sched_ctrl_t *sched_ctrl)
 {
+  /* If only one RI candidate is allowed, RI field is absent (bitlen=0).
+   * In that case select the first allowed RI directly from restriction bitmap. */
+  if (ri_bitlen == 0) {
+    for (int i = 0; i < 8; i++) {
+      if ((ri_restriction >> i) & 0x01) {
+        sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.ri = i;
+        if (get_softmodem_params()->print_csi_debug) {
+          LOG_I(MAC,
+                "gNB CSI RI decode: ri_bitlen=0, ri_restriction=0x%02x -> RI_reported=%u (layers=%u)\n",
+                (unsigned)ri_restriction,
+                (unsigned)i,
+                (unsigned)i + 1u);
+        }
+        return i;
+      }
+    }
+    AssertFatal(false, "ri_bitlen=0 but ri_restriction has no allowed rank\n");
+  }
+
   uint8_t ri_index = pickandreverse_bits(payload, ri_bitlen, cumul_bits);
   int count = 0;
   for (int i = 0; i < 8; i++) {
@@ -614,6 +658,14 @@ static int evaluate_ri_report(uint8_t *payload,
        if(count == ri_index) {
          sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.ri = i;
          LOG_D(MAC,"CSI Reported Rank %d\n", i + 1);
+         if (get_softmodem_params()->print_csi_debug) {
+           LOG_I(MAC,
+                 "gNB CSI RI decode: ri_index=%u, ri_restriction=0x%02x -> RI_reported=%u (layers=%u)\n",
+                 (unsigned)ri_index,
+                 (unsigned)ri_restriction,
+                 (unsigned)i,
+                 (unsigned)i + 1u);
+         }
          return i;
        }
        count++;
@@ -675,6 +727,16 @@ static uint8_t evaluate_pmi_report(uint8_t *payload,
         "PMI Report: X1 %d X2 %d\n",
         sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x1,
         sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x2);
+  if (get_softmodem_params()->print_csi_debug) {
+    LOG_I(NR_MAC,
+          "gNB CSI PMI decode: RI_reported=%u (layers=%u), pmi_x1=0x%x, pmi_x2=0x%x, x1_bitlen=%d, x2_bitlen=%d\n",
+          (unsigned)ri,
+          (unsigned)ri + 1u,
+          (unsigned)sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x1,
+          (unsigned)sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x2,
+          x1_bitlen,
+          x2_bitlen);
+  }
 
   return x1_bitlen + x2_bitlen;
 }
@@ -710,16 +772,15 @@ static void skip_zero_padding(int *cumul_bits, nr_csi_report_t *csi_report, uint
   *cumul_bits+=(max_bitlen-reported_bitlen);
 }
 
-static void extract_pucch_csi_report(NR_CSI_MeasConfig_t *csi_MeasConfig,
-                                     const nfapi_nr_uci_pucch_pdu_format_2_3_4_t *uci_pdu,
-                                     frame_t frame,
-                                     slot_t slot,
-                                     NR_UE_info_t *UE,
-                                     gNB_MAC_INST *nrmac)
+void nr_extract_csi_report_from_raw_payload(NR_CSI_MeasConfig_t *csi_MeasConfig,
+                                            uint8_t *payload,
+                                            uint16_t bitlen,
+                                            frame_t frame,
+                                            slot_t slot,
+                                            NR_UE_info_t *UE,
+                                            gNB_MAC_INST *nrmac)
 {
   /** From Table 6.3.1.1.2-3: RI, LI, CQI, and CRI of codebookType=typeI-SinglePanel */
-  uint8_t *payload = uci_pdu->csi_part1.csi_part1_payload;
-  uint16_t bitlen = uci_pdu->csi_part1.csi_part1_bit_len;
   NR_CSI_ReportConfig__reportQuantity_PR reportQuantity_type = NR_CSI_ReportConfig__reportQuantity_PR_NOTHING;
   NR_CSI_ReportConfig__ext2__reportQuantity_r16_PR reportQuantity_type_r16 =
       NR_CSI_ReportConfig__ext2__reportQuantity_r16_PR_NOTHING;
@@ -774,8 +835,7 @@ static void extract_pucch_csi_report(NR_CSI_MeasConfig_t *csi_MeasConfig,
               evaluate_cri_report(payload, cri_bitlen, cumul_bits, sched_ctrl);
             cumul_bits += cri_bitlen;
             ri_bitlen = csi_report->csi_meas_bitlen.ri_bitlen;
-            if (ri_bitlen)
-              r_index = evaluate_ri_report(payload, ri_bitlen, csi_report->csi_meas_bitlen.ri_restriction, cumul_bits, sched_ctrl);
+            r_index = evaluate_ri_report(payload, ri_bitlen, csi_report->csi_meas_bitlen.ri_restriction, cumul_bits, sched_ctrl);
             cumul_bits += ri_bitlen;
             if (r_index != -1)
               skip_zero_padding(&cumul_bits, csi_report, r_index, bitlen);
@@ -788,8 +848,7 @@ static void extract_pucch_csi_report(NR_CSI_MeasConfig_t *csi_MeasConfig,
               evaluate_cri_report(payload, cri_bitlen, cumul_bits, sched_ctrl);
             cumul_bits += cri_bitlen;
             ri_bitlen = csi_report->csi_meas_bitlen.ri_bitlen;
-            if (ri_bitlen)
-              r_index = evaluate_ri_report(payload, ri_bitlen, csi_report->csi_meas_bitlen.ri_restriction, cumul_bits, sched_ctrl);
+            r_index = evaluate_ri_report(payload, ri_bitlen, csi_report->csi_meas_bitlen.ri_restriction, cumul_bits, sched_ctrl);
             cumul_bits += ri_bitlen;
             if (r_index != -1)
               skip_zero_padding(&cumul_bits, csi_report, r_index, bitlen);
@@ -805,8 +864,7 @@ static void extract_pucch_csi_report(NR_CSI_MeasConfig_t *csi_MeasConfig,
               evaluate_cri_report(payload, cri_bitlen, cumul_bits, sched_ctrl);
             cumul_bits += cri_bitlen;
             ri_bitlen = csi_report->csi_meas_bitlen.ri_bitlen;
-            if (ri_bitlen)
-              r_index = evaluate_ri_report(payload, ri_bitlen, csi_report->csi_meas_bitlen.ri_restriction, cumul_bits, sched_ctrl);
+            r_index = evaluate_ri_report(payload, ri_bitlen, csi_report->csi_meas_bitlen.ri_restriction, cumul_bits, sched_ctrl);
             cumul_bits += ri_bitlen;
             li_bitlen = evaluate_li_report(payload, csi_report, cumul_bits, r_index, sched_ctrl);
             cumul_bits += li_bitlen;
@@ -1008,8 +1066,325 @@ void handle_nr_uci_pucch_2_3_4(module_id_t mod_id, frame_t frame, slot_t slot, c
     if (uci_234->csi_part1.csi_part1_crc != 1) {
       NR_CSI_MeasConfig_t *csi_MeasConfig = UE->sc_info.csi_MeasConfig;
       if (csi_MeasConfig != NULL) {
-        // API to parse the csi report and store it into sched_ctrl
-        extract_pucch_csi_report(csi_MeasConfig, uci_234, frame, slot, UE, nrmac);
+        bool csi_from_ai_payload = false;
+        if (get_softmodem_params()->ai_fb_runtime_sched_mode == 2 && get_softmodem_params()->ai_fb_ulsch_enable) {
+          uint8_t latent[NR_AI_CSI_FB_LATENT_BYTES] = {0};
+          const int csi_bytes = (uci_234->csi_part1.csi_part1_bit_len + 7) / 8;
+          if (csi_bytes >= NR_AI_CSI_FB_LATENT_BYTES) {
+            memcpy(latent, uci_234->csi_part1.csi_part1_payload, NR_AI_CSI_FB_LATENT_BYTES);
+            const nr_pdsch_AntennaPorts_t *ap = &nrmac->radio_config.pdsch_AntennaPorts;
+            const int n_ports = ap->N1 * ap->N2 * ap->XP;
+            const ai_fb_impl_mode_t impl_mode = (ai_fb_impl_mode_t)get_softmodem_params()->ai_fb_impl_mode;
+            uint8_t ai_ri = 0, ai_x1 = 0, ai_x2 = 0, ai_cqi = 0;
+            bool ai_ok = false;
+            if (n_ports == 2) {
+              if (impl_mode == AI_FB_IMPL_CSINET) {
+                csinet_decode2p_out_t dec2 = {0};
+                if (csinet_decode_rank1_2p(latent, &dec2)) {
+                  ai_ok = true;
+                  ai_ri = dec2.report.ri_rank > 0 ? (dec2.report.ri_rank - 1) : 0;
+                  ai_x1 = dec2.report.pmi_x1;
+                  ai_x2 = dec2.report.pmi_x2;
+                  ai_cqi = dec2.report.cqi;
+                }
+              } else {
+                ai_fb_decode2p_out_t dec2 = {0};
+                if (ai_fb_decode_rank1_2p(latent, impl_mode, &dec2)) {
+                  ai_ok = true;
+                  ai_ri = dec2.ri;
+                  ai_x1 = dec2.pmi_x1;
+                  ai_x2 = dec2.pmi_x2;
+                  ai_cqi = dec2.cqi;
+                }
+              }
+            } else {
+              if (impl_mode == AI_FB_IMPL_CSINET) {
+                csinet_decode4p_out_t dec4 = {0};
+                if (csinet_decode_rank1_4p(latent, &dec4)) {
+                  ai_ok = true;
+                  ai_ri = dec4.report.ri_rank > 0 ? (dec4.report.ri_rank - 1) : 0;
+                  ai_x1 = dec4.report.pmi_x1;
+                  ai_x2 = dec4.report.pmi_x2;
+                  ai_cqi = dec4.report.cqi;
+                }
+              } else {
+                ai_fb_decode4p_out_t dec4 = {0};
+                if (ai_fb_decode_rank1_4p(latent, impl_mode, &dec4)) {
+                  ai_ok = true;
+                  ai_ri = dec4.ri;
+                  ai_x1 = dec4.pmi_x1;
+                  ai_x2 = dec4.pmi_x2;
+                  ai_cqi = dec4.cqi;
+                }
+              }
+            }
+            if (ai_ok) {
+              sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.ri = ai_ri;
+              sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x1 = ai_x1;
+              sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x2 = ai_x2;
+              sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.wb_cqi_1tb = ai_cqi;
+              const int cqi_table = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.cqi_table;
+              sched_ctrl->dl_max_mcs = get_mcs_from_cqi(UE->current_DL_BWP.mcsTableIdx, cqi_table, ai_cqi);
+              sched_ctrl->ai_fb_seen = true;
+              sched_ctrl->ai_fb_frame = frame;
+              sched_ctrl->ai_fb_slot = slot;
+              sched_ctrl->custom_pmi_x1 = ai_x1;
+              sched_ctrl->custom_pmi_x2 = ai_x2;
+              sched_ctrl->legacy_pmi_x1 = ai_x1;
+              sched_ctrl->legacy_pmi_x2 = ai_x2;
+              sched_ctrl->ai_fb_runtime_tuple_valid = true;
+              sched_ctrl->ai_fb_runtime_tuple_fresh = true;
+              sched_ctrl->ai_fb_runtime_ri = ai_ri;
+              sched_ctrl->ai_fb_runtime_pmi_x1 = ai_x1;
+              sched_ctrl->ai_fb_runtime_pmi_x2 = ai_x2;
+              sched_ctrl->ai_fb_runtime_cqi = ai_cqi;
+              sched_ctrl->ai_fb_runtime_frame = frame;
+              sched_ctrl->ai_fb_runtime_slot = slot;
+              csi_from_ai_payload = true;
+              if (get_softmodem_params()->print_csi_debug) {
+                LOG_I(NR_MAC,
+                      "gNB AI runtime mode=2: decoded AI tuple from CSI payload RNTI %04x [%d.%d] -> ri=%u pmi=(0x%x,0x%x) cqi=%u\n",
+                      UE->rnti,
+                      frame,
+                      slot,
+                      (unsigned)ai_ri,
+                      (unsigned)ai_x1,
+                      (unsigned)ai_x2,
+                      (unsigned)ai_cqi);
+              }
+            }
+          }
+        }
+        if (!csi_from_ai_payload) {
+          // API to parse the csi report and store it into sched_ctrl
+          extract_pucch_csi_report(csi_MeasConfig, uci_234, frame, slot, UE, nrmac);
+        }
+        sched_ctrl->legacy_pmi_x1 = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x1;
+        sched_ctrl->legacy_pmi_x2 = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x2;
+        if (sched_ctrl->ai_fb_seen && !get_softmodem_params()->ai_fb_bundled_ulsch_enable &&
+            get_softmodem_params()->ai_fb_runtime_sched_mode != 2) {
+          const int slots_per_frame = nrmac->frame_structure.numb_slots_frame;
+          const int sfn_mod = 1024;
+          const int legacy_abs = frame * slots_per_frame + slot;
+          const int custom_abs = sched_ctrl->ai_fb_frame * slots_per_frame + sched_ctrl->ai_fb_slot;
+          int age_slots = legacy_abs - custom_abs;
+          if (age_slots < 0)
+            age_slots += sfn_mod * slots_per_frame;
+          const double age_ms = (10.0 * (double)age_slots) / (double)slots_per_frame;
+          /* Only compare "fresh" custom PMI samples (same/nearby slot) to avoid staleness bias. */
+          const int compare_gating = get_softmodem_params()->ai_fb_compare_gating;
+          const int max_compare_age_slots = get_softmodem_params()->ai_fb_compare_max_age_slots;
+          const bool fresh = age_slots <= max_compare_age_slots;
+          if (compare_gating && !fresh) {
+            if (get_softmodem_params()->print_csi_debug) {
+              LOG_I(NR_MAC,
+                    "PMI compare skipped (stale custom PMI) RNTI %04x legacy[%d.%d] custom[%d.%d] age_slots=%d age_ms=%.3f threshold=%d\n",
+                    UE->rnti,
+                    frame,
+                    slot,
+                    sched_ctrl->ai_fb_frame,
+                    sched_ctrl->ai_fb_slot,
+                    age_slots,
+                    age_ms,
+                    max_compare_age_slots);
+            }
+            goto skip_ai_compare;
+          }
+          sched_ctrl->ai_fb_legacy_decodes++;
+          const bool match = (sched_ctrl->legacy_pmi_x1 == sched_ctrl->custom_pmi_x1) &&
+                             (sched_ctrl->legacy_pmi_x2 == sched_ctrl->custom_pmi_x2);
+          if (match)
+            sched_ctrl->ai_fb_pmi_matches++;
+          if (get_softmodem_params()->print_csi_debug) {
+            LOG_I(NR_MAC,
+                  "PMI compare RNTI %04x legacy[%d.%d]=x1:0x%x x2:0x%x custom[%d.%d]=x1:0x%x x2:0x%x match=%d (rate=%u/%u)\n",
+                  UE->rnti,
+                  frame,
+                  slot,
+                  sched_ctrl->legacy_pmi_x1,
+                  sched_ctrl->legacy_pmi_x2,
+                  sched_ctrl->ai_fb_frame,
+                  sched_ctrl->ai_fb_slot,
+                  sched_ctrl->custom_pmi_x1,
+                  sched_ctrl->custom_pmi_x2,
+                  match ? 1 : 0,
+                  sched_ctrl->ai_fb_pmi_matches,
+                  sched_ctrl->ai_fb_legacy_decodes);
+            if (!match) {
+              LOG_I(NR_MAC,
+                    "PMI mismatch detail RNTI %04x legacy[%d.%d]=x1:0x%x x2:0x%x custom[%d.%d]=x1:0x%x x2:0x%x age_slots=%d age_ms=%.3f\n",
+                    UE->rnti,
+                    frame,
+                    slot,
+                    sched_ctrl->legacy_pmi_x1,
+                    sched_ctrl->legacy_pmi_x2,
+                    sched_ctrl->ai_fb_frame,
+                    sched_ctrl->ai_fb_slot,
+                    sched_ctrl->custom_pmi_x1,
+                    sched_ctrl->custom_pmi_x2,
+                    age_slots,
+                    age_ms);
+            }
+          }
+          const char *ai_log = get_softmodem_params()->ai_fb_log_path;
+          if (ai_log && ai_log[0] != '\0') {
+            pthread_mutex_lock(&gnb_ai_fb_mutex);
+            if (mkdir(ai_log, 0755) < 0 && errno != EEXIST) {}
+            else {
+              char path_ai[512];
+              snprintf(path_ai, sizeof(path_ai), "%s/gnb_ai_pmi_compare.csv", ai_log);
+              FILE *fai = fopen(path_ai, "a");
+              if (fai) {
+                if (!gnb_ai_fb_csv_header_done) {
+                  fprintf(fai,
+                          "frame_legacy,slot_legacy,frame_custom,slot_custom,rnti,legacy_pmi_x1,legacy_pmi_x2,custom_pmi_x1,custom_pmi_x2,match,matches,total\n");
+                  gnb_ai_fb_csv_header_done = 1;
+                }
+                fprintf(fai,
+                        "%d,%d,%d,%d,%u,%u,%u,%u,%u,%u,%u,%u\n",
+                        frame,
+                        slot,
+                        sched_ctrl->ai_fb_frame,
+                        sched_ctrl->ai_fb_slot,
+                        (unsigned)UE->rnti,
+                        (unsigned)sched_ctrl->legacy_pmi_x1,
+                        (unsigned)sched_ctrl->legacy_pmi_x2,
+                        (unsigned)sched_ctrl->custom_pmi_x1,
+                        (unsigned)sched_ctrl->custom_pmi_x2,
+                        match ? 1u : 0u,
+                        (unsigned)sched_ctrl->ai_fb_pmi_matches,
+                        (unsigned)sched_ctrl->ai_fb_legacy_decodes);
+                fclose(fai);
+              }
+            }
+            pthread_mutex_unlock(&gnb_ai_fb_mutex);
+          }
+        }
+skip_ai_compare:
+        /* Record decoded CSI feedback for monitoring when csi_record_path is set; timestamp_utc_us for time-sync with UE recordings */
+        {
+          const char *base = get_softmodem_params()->csi_record_path;
+          if (base && base[0] != '\0') {
+            const struct CRI_RI_LI_PMI_CQI *r = &sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report;
+            struct timeval tv;
+            gettimeofday(&tv, NULL);
+            int64_t timestamp_utc_us = (int64_t)tv.tv_sec * 1000000 + (int64_t)tv.tv_usec;
+            pthread_mutex_lock(&gnb_csi_feedback_mutex);
+            if (mkdir(base, 0755) < 0 && errno != EEXIST) {}
+            else {
+              char path[512];
+              snprintf(path, sizeof(path), "%s/gnb_csi_feedback.csv", base);
+              FILE *f = fopen(path, "a");
+              if (f) {
+                if (!gnb_csi_feedback_csv_header_done) {
+                  fprintf(f, "timestamp_utc_us,frame,slot,rnti,cri,ri,li,pmi_x1,pmi_x2,wb_cqi_1tb,wb_cqi_2tb,csi_report_id\n");
+                  gnb_csi_feedback_csv_header_done = 1;
+                }
+                fprintf(f, "%ld,%d,%d,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
+                        (long)timestamp_utc_us, frame, slot, (unsigned)UE->rnti,
+                        r->cri, r->ri, r->li, r->pmi_x1, r->pmi_x2,
+                        r->wb_cqi_1tb, r->wb_cqi_2tb, r->csi_report_id);
+                fclose(f);
+              }
+            }
+            pthread_mutex_unlock(&gnb_csi_feedback_mutex);
+          }
+          /* Feed CSI report to imscope when enabled */
+          {
+            const struct CRI_RI_LI_PMI_CQI *cr = &sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report;
+            if (cr->print_report && RC.gNB != NULL) {
+              PHY_VARS_gNB *gNB = RC.gNB[nrmac->Mod_id];
+              if (gNB != NULL) {
+                csi_report_scope_payload_t payload;
+                memset(&payload, 0, sizeof(payload));
+                payload.frame = frame;
+                payload.slot = slot;
+                payload.rnti = (uint16_t)UE->rnti;
+                payload.ri = cr->ri;
+                payload.cqi = cr->wb_cqi_1tb;
+                payload.pmi_x1 = cr->pmi_x1;
+                payload.pmi_x2 = cr->pmi_x2;
+                payload.csi_report_id = cr->csi_report_id;
+                {
+                  const nr_pdsch_AntennaPorts_t *ap = &nrmac->radio_config.pdsch_AntennaPorts;
+                  const unsigned p = (unsigned)(ap->N1 * ap->N2 * ap->XP);
+                  payload.pdsch_logical_ports = p > 255u ? 255u : (uint8_t)p;
+                  long maxL = 0;
+                  if (UE->sc_info.maxMIMO_Layers_PDSCH != NULL)
+                    maxL = *UE->sc_info.maxMIMO_Layers_PDSCH;
+                  if (maxL < 1)
+                    maxL = p > 0u ? (long)p : 1L;
+                  payload.max_dl_mimo_layers = maxL > 255L ? 255 : (uint8_t)maxL;
+                }
+                {
+                  const int spf = nrmac->frame_structure.numb_slots_frame;
+                  const softmodem_params_t *spm = get_softmodem_params();
+                  const int mode = spm->ai_fb_runtime_sched_mode;
+                  payload.ai_sched_mode = mode < 0 ? 0 : (mode > 255 ? 255 : (uint8_t)mode);
+                  payload.ai_runtime_tuple_valid = sched_ctrl->ai_fb_runtime_tuple_valid ? 1u : 0u;
+                  payload.ai_runtime_tuple_fresh = sched_ctrl->ai_fb_runtime_tuple_fresh ? 1u : 0u;
+                  payload.ai_runtime_ri = sched_ctrl->ai_fb_runtime_ri;
+                  payload.ai_runtime_cqi = sched_ctrl->ai_fb_runtime_cqi;
+                  payload.ai_runtime_pmi_x1 = sched_ctrl->ai_fb_runtime_pmi_x1;
+                  payload.ai_runtime_pmi_x2 = sched_ctrl->ai_fb_runtime_pmi_x2;
+                  payload.ai_runtime_origin_frame = sched_ctrl->ai_fb_runtime_frame;
+                  payload.ai_runtime_origin_slot = sched_ctrl->ai_fb_runtime_slot;
+                  payload.ai_runtime_override_used = sched_ctrl->ai_fb_runtime_override_used;
+                  payload.ai_runtime_fallback_missing = sched_ctrl->ai_fb_runtime_fallback_missing;
+                  payload.ai_runtime_fallback_stale = sched_ctrl->ai_fb_runtime_fallback_stale;
+                  payload.ai_runtime_fallback_incomplete = sched_ctrl->ai_fb_runtime_fallback_incomplete;
+                  if (!sched_ctrl->ai_fb_runtime_tuple_valid || spf < 1) {
+                    payload.ai_runtime_age_slots = 0xFFFFu;
+                  } else {
+                    const uint64_t cur_abs = (uint64_t)(uint32_t)frame * (uint32_t)spf + (uint32_t)slot;
+                    const uint64_t tup_abs =
+                        (uint64_t)sched_ctrl->ai_fb_runtime_frame * (uint32_t)spf + (uint32_t)sched_ctrl->ai_fb_runtime_slot;
+                    const uint64_t age = cur_abs >= tup_abs ? cur_abs - tup_abs : 0;
+                    payload.ai_runtime_age_slots = age > 0xFFFFu ? 0xFFFFu : (uint16_t)age;
+                  }
+                  if (!sched_ctrl->ai_fb_runtime_tuple_valid) {
+                    payload.ai_ri_match_decode_vs_runtime = 2u;
+                    payload.ai_pmi_match_decode_vs_runtime = 2u;
+                    payload.ai_cqi_delta_ai_minus_decode = 0;
+                  } else {
+                    payload.ai_ri_match_decode_vs_runtime = (cr->ri == sched_ctrl->ai_fb_runtime_ri) ? 1u : 0u;
+                    const bool pmi_match =
+                        (cr->pmi_x1 == sched_ctrl->ai_fb_runtime_pmi_x1 && cr->pmi_x2 == sched_ctrl->ai_fb_runtime_pmi_x2);
+                    payload.ai_pmi_match_decode_vs_runtime = pmi_match ? 1u : 0u;
+                    int d = (int)sched_ctrl->ai_fb_runtime_cqi - (int)cr->wb_cqi_1tb;
+                    if (d > 127)
+                      d = 127;
+                    else if (d < -128)
+                      d = -128;
+                    payload.ai_cqi_delta_ai_minus_decode = (int8_t)d;
+                  }
+                  const bool mode_on = mode != 0;
+                  const bool fresh_tuple = sched_ctrl->ai_fb_runtime_tuple_valid && sched_ctrl->ai_fb_runtime_tuple_fresh;
+                  const bool differs = (sched_ctrl->ai_fb_runtime_ri != cr->ri || sched_ctrl->ai_fb_runtime_cqi != cr->wb_cqi_1tb
+                                        || sched_ctrl->ai_fb_runtime_pmi_x1 != cr->pmi_x1
+                                        || sched_ctrl->ai_fb_runtime_pmi_x2 != cr->pmi_x2);
+                  payload.ai_runtime_override_disagrees_decode = (uint8_t)(mode_on && fresh_tuple && differs);
+                }
+                /* RSRP: cri-RSRP fills csirs_rsrp_report. For num_antenna_ports >= 4, config_rsrp_meas_report uses
+                 * ssb_Index_RSRP instead (see nr_radio_config.c), so the decoded RSRP is in ssb_rsrp_report — imscope
+                 * must read both or 4x4 always showed 0 dBm. */
+                if (sched_ctrl->CSI_report.csirs_rsrp_report.nb > 0) {
+                  payload.rsrp_dBm = (int8_t)sched_ctrl->CSI_report.csirs_rsrp_report.r[0].RSRP;
+                  /* SINRx10 is set when report type is cri_SINR_r16; for CQI report it is 0 */
+                  payload.sinr_dB = (int8_t)(sched_ctrl->CSI_report.csirs_rsrp_report.r[0].SINRx10 / 10);
+                } else if (sched_ctrl->CSI_report.ssb_rsrp_report.nb > 0) {
+                  payload.rsrp_dBm = (int8_t)sched_ctrl->CSI_report.ssb_rsrp_report.r[0].RSRP;
+                }
+                if (sched_ctrl->CSI_report.ssb_rsrp_report.nb > 0 && payload.sinr_dB == 0) {
+                  payload.sinr_dB = (int8_t)(sched_ctrl->CSI_report.ssb_rsrp_report.r[0].SINRx10 / 10);
+                }
+                metadata meta = { .slot = slot, .frame = frame };
+                gNBscopeCopyWithMetadata(gNB, gNBCsiReportParams,
+                                         &payload, sizeof(payload), 1, 1, 0, &meta);
+              }
+            }
+          }
+        }
       }
     }
     free(uci_234->csi_part1.csi_part1_payload);
@@ -1041,6 +1416,22 @@ static void set_pucch_allocation(const NR_UE_UL_BWP_t *ul_bwp, const int r_pucch
                       &pucch->nr_of_symb,
                       &pucch->start_symb);
   }
+}
+
+static void extract_pucch_csi_report(NR_CSI_MeasConfig_t *csi_MeasConfig,
+                                     const nfapi_nr_uci_pucch_pdu_format_2_3_4_t *uci_pdu,
+                                     frame_t frame,
+                                     slot_t slot,
+                                     NR_UE_info_t *UE,
+                                     gNB_MAC_INST *nrmac)
+{
+  nr_extract_csi_report_from_raw_payload(csi_MeasConfig,
+                                         uci_pdu->csi_part1.csi_part1_payload,
+                                         uci_pdu->csi_part1.csi_part1_bit_len,
+                                         frame,
+                                         slot,
+                                         UE,
+                                         nrmac);
 }
 
 static bool test_pucch0_vrb_occupation(const NR_sched_pucch_t *pucch, uint16_t *vrb_map_UL, const int bwp_start, const int bwp_size)

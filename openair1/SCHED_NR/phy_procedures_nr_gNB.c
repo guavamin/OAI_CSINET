@@ -1163,11 +1163,18 @@ int phy_procedures_gNB_uespec_RX(PHY_VARS_gNB *gNB, int frame_rx, int slot_rx, N
   if (gNB->max_nb_pusch == 1)
     stop_meas(&gNB->ulsch_decoding_stats);
 
+  {
+    static bool logged_no_srs = false;
+    if (gNB->max_nb_srs == 0 && !logged_no_srs) {
+      LOG_W(NR_PHY, "SRS: max_nb_srs=0, no SRS occasions will be processed (check do_SRS and gNB init)\n");
+      logged_no_srs = true;
+    }
+  }
   for (int i = 0; i < gNB->max_nb_srs; i++) {
     NR_gNB_SRS_t *srs = &gNB->srs[i];
     if (!(srs && srs->active && srs->frame == frame_rx && srs->slot == slot_rx))
       continue;
-    LOG_D(NR_PHY, "(%d.%d) gNB is waiting for SRS, id = %i\n", frame_rx, slot_rx, i);
+    LOG_D(NR_PHY, "(%d.%d) gNB processing SRS occasion id=%d\n", frame_rx, slot_rx, i);
 
     start_meas(&gNB->rx_srs_stats);
 
@@ -1198,6 +1205,45 @@ int phy_procedures_gNB_uespec_RX(PHY_VARS_gNB *gNB, int frame_rx, int slot_rx, N
                          snr_per_rb,
                          &timing_advance_offset,
                          timing_advance_offset_nsec);
+
+    /* Feed SRS channel estimates to imscope if enabled (monitor UL channel vs SRS periodicity) */
+    {
+      const int lineSz = (int)nb_antennas_rx * (int)N_ap * ((int)ofdm_symbol_size * (int)N_symb_SRS);
+      metadata meta = {.slot = slot_rx, .frame = frame_rx};
+      const bool srs_imscope_log_enable = get_softmodem_params()->srs_imscope_log_enable != 0;
+      if (lineSz <= 0) {
+        if (srs_imscope_log_enable)
+          LOG_W(NR_PHY,
+                "SRS channel imscope: lineSz=%d (nb_rx=%u N_ap=%u ofdm_sz=%u N_symb=%u), skip feed\n",
+                lineSz,
+                (unsigned)nb_antennas_rx,
+                (unsigned)N_ap,
+                (unsigned)ofdm_symbol_size,
+                (unsigned)N_symb_SRS);
+      } else if (!gNB->scopeData) {
+        if (srs_imscope_log_enable)
+          LOG_W(NR_PHY,
+                "SRS channel imscope: scopeData is NULL (run gNB with --imscope). frame=%d slot=%d lineSz=%d\n",
+                frame_rx,
+                slot_rx,
+                lineSz);
+      } else {
+        if (srs_imscope_log_enable)
+          LOG_D(NR_PHY,
+                "SRS channel imscope feed: frame=%d slot=%d lineSz=%d\n",
+                frame_rx,
+                slot_rx,
+                lineSz);
+        gNBscopeCopyWithMetadata(gNB,
+                                  gNBSrsChEstimate,
+                                  &srs_estimated_channel_freq[0][0][0],
+                                  sizeof(c16_t),
+                                  1,
+                                  lineSz,
+                                  0,
+                                  &meta);
+      }
+    }
 
     if ((gNB->srs->snr * 10) < gNB->srs_thres) {
       srs_est = -1;

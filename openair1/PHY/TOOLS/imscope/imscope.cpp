@@ -20,6 +20,7 @@
  */
 
 #include "imgui.h"
+#include "imgui_internal.h" /* DockBuilderDockWindow, DockBuilderFinish (internal API) */
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 #include <stdio.h>
@@ -40,9 +41,11 @@ extern "C" {
 #include <limits>
 #include <algorithm>
 #include <sstream>
+#include <string>
 #include <mutex>
 #include <thread>
 #include <fstream>
+#include <cstring>
 #include "imscope_internal.h"
 #include <cstdlib>
 #include <vector>
@@ -99,7 +102,8 @@ class LLRPlot {
     }
 
     ImScopeDataWrapper &scope_data = scope_array[type];
-    if (ImPlot::BeginPlot(label)) {
+    const ImVec2 llr_avail = ImGui::GetContentRegionAvail();
+    if (llr_avail.x > 2.f && llr_avail.y > 2.f && ImPlot::BeginPlot(label)) {
       ImPlot::SetupAxes(nullptr, nullptr, ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
       if (!frozen || next) {
         if (scope_data.is_data_ready) {
@@ -203,41 +207,45 @@ class IQHist {
     }
     const char *items[] = {"Histogram", "RMS", "Scatter"};
     ImGui::Combo("Select plot type", &plot_type, items, disable_scatterplot ? 2 : 3);
-    if (plot_type == 0) {
-      float x = ImGui::CalcItemWidth();
-      if (ImPlot::BeginPlot(label.c_str(), {x, x})) {
-        ImPlot::SetupAxes(nullptr, nullptr, ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
-        ImPlot::PlotHistogram2D(label.c_str(),
-                                iq_data->real.data(),
-                                iq_data->imag.data(),
-                                iq_data->len,
-                                num_bins,
-                                num_bins,
-                                ImPlotRect(-range, range, -range, range));
-        ImPlot::EndPlot();
-      }
-    } else if (plot_type == 2) {
-      float x = ImGui::CalcItemWidth();
-      if (ImPlot::BeginPlot(label.c_str(), {x, x})) {
-        ImPlot::SetupAxes(nullptr, nullptr, ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
-        int points_drawn = 0;
-        while (points_drawn < iq_data->len) {
-          // Limit the amount of data plotted with PlotScatter call (issue with vertices/draw call)
-          int points_to_draw = std::min(iq_data->len - points_drawn, 16000);
-          ImPlot::SetNextMarkerStyle(ImPlotMarker_Circle, 1, IMPLOT_AUTO_COL, 1);
-          ImPlot::PlotScatter(label.c_str(),
-                              iq_data->real.data() + points_drawn,
-                              iq_data->imag.data() + points_drawn,
-                              points_to_draw);
-          points_drawn += points_to_draw;
+    /* Skip plot when content region is too small (e.g. window being moved/docked) to avoid ImPlot/ImGui stack issues. */
+    const ImVec2 plot_avail = ImGui::GetContentRegionAvail();
+    if (plot_avail.x > 2.f && plot_avail.y > 2.f) {
+      if (plot_type == 0) {
+        float x = ImGui::CalcItemWidth();
+        if (x > 2.f && ImPlot::BeginPlot(label.c_str(), {x, x})) {
+          ImPlot::SetupAxes(nullptr, nullptr, ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
+          ImPlot::PlotHistogram2D(label.c_str(),
+                                  iq_data->real.data(),
+                                  iq_data->imag.data(),
+                                  iq_data->len,
+                                  num_bins,
+                                  num_bins,
+                                  ImPlotRect(-range, range, -range, range));
+          ImPlot::EndPlot();
         }
-        ImPlot::EndPlot();
-      }
-    } else if (plot_type == 1) {
-      if (ImPlot::BeginPlot(label.c_str())) {
-        ImPlot::SetupAxes(nullptr, nullptr, ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
-        ImPlot::PlotLine(label.c_str(), iq_data->power.data(), iq_data->len);
-        ImPlot::EndPlot();
+      } else if (plot_type == 2) {
+        float x = ImGui::CalcItemWidth();
+        if (x > 2.f && ImPlot::BeginPlot(label.c_str(), {x, x})) {
+          ImPlot::SetupAxes(nullptr, nullptr, ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
+          int points_drawn = 0;
+          while (points_drawn < iq_data->len) {
+            // Limit the amount of data plotted with PlotScatter call (issue with vertices/draw call)
+            int points_to_draw = std::min(iq_data->len - points_drawn, 16000);
+            ImPlot::SetNextMarkerStyle(ImPlotMarker_Circle, 1, IMPLOT_AUTO_COL, 1);
+            ImPlot::PlotScatter(label.c_str(),
+                                iq_data->real.data() + points_drawn,
+                                iq_data->imag.data() + points_drawn,
+                                points_to_draw);
+            points_drawn += points_to_draw;
+          }
+          ImPlot::EndPlot();
+        }
+      } else if (plot_type == 1) {
+        if (ImPlot::BeginPlot(label.c_str())) {
+          ImPlot::SetupAxes(nullptr, nullptr, ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
+          ImPlot::PlotLine(label.c_str(), iq_data->power.data(), iq_data->len);
+          ImPlot::EndPlot();
+        }
       }
     }
     ImGui::Text("Maximum value = %d, nonzero elements/total %d/%d", iq_data->max_iq, iq_data->nonzero_count, iq_data->len);
@@ -366,7 +374,8 @@ class IQSlotHeatmap {
       }
     }
     static std::vector<int> symbol_boundaries = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13};
-    if (ImPlot::BeginPlot(label.c_str(), {(float)ImGui::GetWindowWidth() * 0.9f, 0})) {
+    const float heatmap_h = (float)ImGui::GetWindowWidth() * 0.9f;
+    if (heatmap_h > 2.f && ImPlot::BeginPlot(label.c_str(), {heatmap_h, 0})) {
       auto num_sc = num_rb * NR_NB_SC_PER_RB;
       ImPlot::SetupAxes(nullptr, nullptr, ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
       ImPlot::SetupAxes("symbols", "subcarriers");
@@ -421,113 +430,229 @@ struct ScrollingBuffer {
   }
 };
 
-void ShowUeScope(void *data_void_ptr, float t)
+// CSI-RS channel buffer layout: [rx][port][sc], n_sc = ofdm_symbol_size + FILTER_MARGIN (see csi_rx.c)
+#define CSIRS_FILTER_MARGIN 32
+
+/* Return true if window title should be shown. filter==NULL or "" means show all. Else filter is comma-separated list of titles. */
+static bool ImScopeShowWindow(const char *title, const char *filter)
+{
+  if (!filter || filter[0] == '\0')
+    return true;
+  std::string s(filter);
+  size_t start = 0;
+  while (start < s.size()) {
+    size_t end = s.find(',', start);
+    if (end == std::string::npos)
+      end = s.size();
+    while (start < end && (s[start] == ' ' || s[start] == '\t'))
+      start++;
+    size_t trim_end = end;
+    while (trim_end > start && (s[trim_end - 1] == ' ' || s[trim_end - 1] == '\t'))
+      trim_end--;
+    if (trim_end > start) {
+      std::string token = s.substr(start, trim_end - start);
+      if (token == title)
+        return true;
+    }
+    start = end + 1;
+  }
+  return false;
+}
+
+/* Parse comma-separated filter into a list of window titles (trimmed). Used for initial dock layout. */
+static void ImScopeParseFilterTitles(const char *filter, std::vector<std::string> &out_titles)
+{
+  out_titles.clear();
+  if (!filter || filter[0] == '\0')
+    return;
+  std::string s(filter);
+  size_t start = 0;
+  while (start < s.size()) {
+    size_t end = s.find(',', start);
+    if (end == std::string::npos)
+      end = s.size();
+    while (start < end && (s[start] == ' ' || s[start] == '\t'))
+      start++;
+    size_t trim_end = end;
+    while (trim_end > start && (s[trim_end - 1] == ' ' || s[trim_end - 1] == '\t'))
+      trim_end--;
+    if (trim_end > start) {
+      out_titles.push_back(s.substr(start, trim_end - start));
+    }
+    start = end + 1;
+  }
+}
+
+void ShowUeScope(void *data_void_ptr, float t, const char *window_filter)
 {
   PHY_VARS_NR_UE *ue = (PHY_VARS_NR_UE *)data_void_ptr;
-  ImGui::Begin("UE KPI");
-  if (ImPlot::BeginPlot("##Scrolling", ImVec2(-1, 150))) {
-    static float history = 10.0f;
-    ImGui::SliderFloat("History", &history, 1, 30, "%.1f s");
-    static ScrollingBuffer rbs_buffer;
-    static ScrollingBuffer bler;
-    static ScrollingBuffer mcs;
-    rbs_buffer.AddPoint(t, getKPIUE()->nofRBs);
-    bler.AddPoint(t, (float)getKPIUE()->nb_nack / (float)getKPIUE()->nb_total);
-    mcs.AddPoint(t, (float)getKPIUE()->dl_mcs);
-    ImPlot::SetupAxes(nullptr, nullptr, ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
-    ImPlot::SetupAxes("time", "noOfRbs");
-    ImPlot::SetupAxisLimits(ImAxis_X1, t - history, t, ImGuiCond_Always);
-    ImPlot::SetupAxisLimits(ImAxis_Y1, 0, NR_MAX_RB);
-    ImPlot::SetupAxis(ImAxis_Y2, "bler [%]", ImPlotAxisFlags_AuxDefault);
-    ImPlot::SetupAxis(ImAxis_Y3, "MCS", ImPlotAxisFlags_AuxDefault);
-    ImPlot::SetAxes(ImAxis_X1, ImAxis_Y1);
-    ImPlot::PlotLine("noOfRbs", &rbs_buffer.Data[0].x, &rbs_buffer.Data[0].y, rbs_buffer.Data.size(), 0, 0, 2 * sizeof(float));
-    ImPlot::SetAxes(ImAxis_X1, ImAxis_Y2);
-    ImPlot::PlotLine("bler", &bler.Data[0].x, &bler.Data[0].y, bler.Data.size(), 0, 0, 2 * sizeof(float));
-    ImPlot::SetAxes(ImAxis_X1, ImAxis_Y3);
-    ImPlot::PlotLine("mcs", &mcs.Data[0].x, &mcs.Data[0].y, mcs.Data.size(), 0, 0, 2 * sizeof(float));
-    ImPlot::EndPlot();
-  }
-  ImGui::End();
 
-  if (ImGui::Begin("UE PDCCH IQ")) {
-    static auto iq_data = new IQData();
-    static auto pdcch_iq_hist = new IQHist("PDCCH IQ");
-    bool new_data = false;
-    if (pdcch_iq_hist->ShouldReadData()) {
-      new_data = iq_data->TryCollect(&scope_array[pdcchRxdataF_comp], t, pdcch_iq_hist->GetEpsilon(), iq_procedure_timer);
+  static IQData *csirs_shared_iq_data = nullptr;
+  static IQHist *csirs_iq_hist_flatten = nullptr;
+  static bool read_csirs_perlink = false;
+  if (!csirs_shared_iq_data) {
+    csirs_shared_iq_data = new IQData();
+    csirs_iq_hist_flatten = new IQHist("CSI-RS channel IQ");
+  }
+
+  if (ImScopeShowWindow("UE KPI", window_filter)) {
+    ImGui::Begin("UE KPI");
+    const ImVec2 kpi_avail = ImGui::GetContentRegionAvail();
+    if (kpi_avail.y > 2.f && ImPlot::BeginPlot("##Scrolling", ImVec2(-1, 150))) {
+      static float history = 10.0f;
+      ImGui::SliderFloat("History", &history, 1, 30, "%.1f s");
+      static ScrollingBuffer rbs_buffer;
+      static ScrollingBuffer bler;
+      static ScrollingBuffer mcs;
+      rbs_buffer.AddPoint(t, getKPIUE()->nofRBs);
+      bler.AddPoint(t, (float)getKPIUE()->nb_nack / (float)getKPIUE()->nb_total);
+      mcs.AddPoint(t, (float)getKPIUE()->dl_mcs);
+      ImPlot::SetupAxes(nullptr, nullptr, ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
+      ImPlot::SetupAxes("time", "noOfRbs");
+      ImPlot::SetupAxisLimits(ImAxis_X1, t - history, t, ImGuiCond_Always);
+      ImPlot::SetupAxisLimits(ImAxis_Y1, 0, NR_MAX_RB);
+      ImPlot::SetupAxis(ImAxis_Y2, "bler [%]", ImPlotAxisFlags_AuxDefault);
+      ImPlot::SetupAxis(ImAxis_Y3, "MCS", ImPlotAxisFlags_AuxDefault);
+      ImPlot::SetAxes(ImAxis_X1, ImAxis_Y1);
+      ImPlot::PlotLine("noOfRbs", &rbs_buffer.Data[0].x, &rbs_buffer.Data[0].y, rbs_buffer.Data.size(), 0, 0, 2 * sizeof(float));
+      ImPlot::SetAxes(ImAxis_X1, ImAxis_Y2);
+      ImPlot::PlotLine("bler", &bler.Data[0].x, &bler.Data[0].y, bler.Data.size(), 0, 0, 2 * sizeof(float));
+      ImPlot::SetAxes(ImAxis_X1, ImAxis_Y3);
+      ImPlot::PlotLine("mcs", &mcs.Data[0].x, &mcs.Data[0].y, mcs.Data.size(), 0, 0, 2 * sizeof(float));
+      ImPlot::EndPlot();
     }
-    pdcch_iq_hist->Draw(iq_data, t, new_data);
+    ImGui::End();
   }
-  ImGui::End();
 
-  if (ImGui::Begin("UE PDCCH LLR")) {
-    static auto llr_plot = new LLRPlot();
-    llr_plot->Draw(t, pdcchLlr, "PDCCH LLR");
-  }
-  ImGui::End();
-
-  if (ImGui::Begin("UE PDSCH IQ")) {
-    static auto iq_data = new IQData();
-    static auto pdsch_iq_hist = new IQHist("PDSCH IQ");
-    bool new_data = false;
-    if (pdsch_iq_hist->ShouldReadData()) {
-      new_data = iq_data->TryCollect(&scope_array[pdschRxdataF_comp], t, pdsch_iq_hist->GetEpsilon(), iq_procedure_timer);
+  if (ImScopeShowWindow("UE PDCCH IQ", window_filter)) {
+    if (ImGui::Begin("UE PDCCH IQ")) {
+      static auto iq_data = new IQData();
+      static auto pdcch_iq_hist = new IQHist("PDCCH IQ");
+      bool new_data = false;
+      if (pdcch_iq_hist->ShouldReadData()) {
+        new_data = iq_data->TryCollect(&scope_array[pdcchRxdataF_comp], t, pdcch_iq_hist->GetEpsilon(), iq_procedure_timer);
+      }
+      pdcch_iq_hist->Draw(iq_data, t, new_data);
     }
-    pdsch_iq_hist->Draw(iq_data, t, new_data);
+    ImGui::End();
   }
-  ImGui::End();
-
-  if (ImGui::Begin("UE PDSCH Chan est")) {
-    static auto iq_data = new IQData();
-    static auto iq_hist = new IQHist("PDSCH Chan est IQ");
-    bool new_data = false;
-    if (iq_hist->ShouldReadData()) {
-      new_data = iq_data->TryCollect(&scope_array[pdschChanEstimates], t, iq_hist->GetEpsilon(), iq_procedure_timer);
+  if (ImScopeShowWindow("UE PDCCH LLR", window_filter)) {
+    if (ImGui::Begin("UE PDCCH LLR")) {
+      static auto llr_plot = new LLRPlot();
+      llr_plot->Draw(t, pdcchLlr, "PDCCH LLR");
     }
-    iq_hist->Draw(iq_data, t, new_data);
+    ImGui::End();
   }
-  ImGui::End();
-
-  if (ImGui::Begin("UE PDSCH IQ before compensation")) {
-    static auto iq_data = new IQData();
-    static auto iq_hist = new IQHist("PDSCH IQ before compensation");
-    bool new_data = false;
-    if (iq_hist->ShouldReadData()) {
-      new_data = iq_data->TryCollect(&scope_array[pdschRxdataF], t, iq_hist->GetEpsilon(), iq_procedure_timer);
+  if (ImScopeShowWindow("UE PDSCH IQ", window_filter)) {
+    if (ImGui::Begin("UE PDSCH IQ")) {
+      static auto iq_data = new IQData();
+      static auto pdsch_iq_hist = new IQHist("PDSCH IQ");
+      bool new_data = false;
+      if (pdsch_iq_hist->ShouldReadData()) {
+        new_data = iq_data->TryCollect(&scope_array[pdschRxdataF_comp], t, pdsch_iq_hist->GetEpsilon(), iq_procedure_timer);
+      }
+      pdsch_iq_hist->Draw(iq_data, t, new_data);
     }
-    iq_hist->Draw(iq_data, t, new_data);
+    ImGui::End();
   }
-  ImGui::End();
-
-
-  if (ImGui::Begin("Time domain samples")) {
-    static auto iq_data = new IQData();
-    // Issue with imgui deferring draw calls until the end of the frame - cases segfault if scatterplot has too many points
-    bool disable_scatterplot = true;
-    static auto time_domain_iq = new IQHist("Time domain samples", disable_scatterplot);
-    bool new_data = false;
-    if (time_domain_iq->ShouldReadData()) {
-      new_data = iq_data->TryCollect(&scope_array[ueTimeDomainSamples], t, time_domain_iq->GetEpsilon(), iq_procedure_timer);
+  if (ImScopeShowWindow("UE PDSCH Chan est", window_filter)) {
+    if (ImGui::Begin("UE PDSCH Chan est")) {
+      static auto iq_data = new IQData();
+      static auto iq_hist = new IQHist("PDSCH Chan est IQ");
+      bool new_data = false;
+      if (iq_hist->ShouldReadData()) {
+        new_data = iq_data->TryCollect(&scope_array[pdschChanEstimates], t, iq_hist->GetEpsilon(), iq_procedure_timer);
+      }
+      iq_hist->Draw(iq_data, t, new_data);
     }
-    time_domain_iq->Draw(iq_data, t, new_data);
+    ImGui::End();
   }
-  ImGui::End();
-
-  if (ImGui::Begin("Time domain samples - before sync")) {
-    static auto iq_data = new IQData();
-    // Issue with imgui deferring draw calls until the end of the frame - cases segfault if scatterplot has too many points
-    bool disable_scatterplot = true;
-    static auto time_domain_iq = new IQHist("Time domain samples - before sync", disable_scatterplot);
-    bool new_data = false;
-    if (time_domain_iq->ShouldReadData()) {
-      new_data = iq_data->TryCollect(&scope_array[ueTimeDomainSamplesBeforeSync], t, time_domain_iq->GetEpsilon(), iq_procedure_timer);
+  if (ImScopeShowWindow("UE PDSCH IQ before compensation", window_filter)) {
+    if (ImGui::Begin("UE PDSCH IQ before compensation")) {
+      static auto iq_data = new IQData();
+      static auto iq_hist = new IQHist("PDSCH IQ before compensation");
+      bool new_data = false;
+      if (iq_hist->ShouldReadData()) {
+        new_data = iq_data->TryCollect(&scope_array[pdschRxdataF], t, iq_hist->GetEpsilon(), iq_procedure_timer);
+      }
+      iq_hist->Draw(iq_data, t, new_data);
     }
-    time_domain_iq->Draw(iq_data, t, new_data);
+    ImGui::End();
   }
-  ImGui::End();
-
-  if (ImGui::Begin("Broadcast channel")) {
+  if (ImScopeShowWindow("UE CSI-RS channel estimates", window_filter)) {
+    if (ImGui::Begin("UE CSI-RS channel estimates")) {
+      bool new_data = false;
+      if (csirs_iq_hist_flatten->ShouldReadData()) {
+        new_data = csirs_shared_iq_data->TryCollect(&scope_array[ueCsirsChEstimate], t, csirs_iq_hist_flatten->GetEpsilon(), iq_procedure_timer);
+      }
+      csirs_iq_hist_flatten->Draw(csirs_shared_iq_data, t, new_data);
+    }
+    ImGui::End();
+  }
+  if (ImScopeShowWindow("UE CSI-RS channel estimates (per RX-TX link)", window_filter)) {
+    if (ImGui::Begin("UE CSI-RS channel estimates (per RX-TX link)")) {
+    if (read_csirs_perlink) {
+      csirs_shared_iq_data->TryCollect(&scope_array[ueCsirsChEstimate], t, csirs_iq_hist_flatten->GetEpsilon(), iq_procedure_timer);
+    }
+    ImGui::Checkbox("Read", &read_csirs_perlink);
+    const int n_sc = ue->frame_parms.ofdm_symbol_size + CSIRS_FILTER_MARGIN;
+    const int nb_rx = ue->frame_parms.nb_antennas_rx;
+    if (n_sc > 0 && nb_rx > 0 && csirs_shared_iq_data->len > 0) {
+      const int num_links = csirs_shared_iq_data->len / n_sc;
+      const int num_ports = num_links / nb_rx;
+      if (num_ports > 0 && num_links <= 64) {
+        const ImVec2 csirs_avail = ImGui::GetContentRegionAvail();
+        if (csirs_avail.x > 2.f && csirs_avail.y > 2.f && ImPlot::BeginPlot("CSI-RS per link (RMS)")) {
+          ImPlot::SetupAxes("Channel coefficient index", "RMS", ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
+          const std::vector<float> &power = csirs_shared_iq_data->power;
+          for (int link = 0; link < num_links; link++) {
+            int rx = link / num_ports;
+            int tx = link % num_ports;
+            char label[32];
+            snprintf(label, sizeof(label), "RX%d-TX%d", rx, tx);
+            ImPlot::PlotLine(label, &power[link * n_sc], n_sc);
+          }
+          ImPlot::EndPlot();
+        }
+      } else {
+        ImGui::Text("No data or too many links (num_links=%d)", num_links);
+      }
+    } else {
+      ImGui::Text("Enable Read to show per RX-TX channel estimates (same data as UE CSI-RS channel estimates).");
+    }
+    }
+    ImGui::End();
+  }
+  if (ImScopeShowWindow("Time domain samples", window_filter)) {
+    if (ImGui::Begin("Time domain samples")) {
+      static auto iq_data = new IQData();
+      // Issue with imgui deferring draw calls until the end of the frame - cases segfault if scatterplot has too many points
+      bool disable_scatterplot = true;
+      static auto time_domain_iq = new IQHist("Time domain samples", disable_scatterplot);
+      bool new_data = false;
+      if (time_domain_iq->ShouldReadData()) {
+        new_data = iq_data->TryCollect(&scope_array[ueTimeDomainSamples], t, time_domain_iq->GetEpsilon(), iq_procedure_timer);
+      }
+      time_domain_iq->Draw(iq_data, t, new_data);
+    }
+    ImGui::End();
+  }
+  if (ImScopeShowWindow("Time domain samples - before sync", window_filter)) {
+    if (ImGui::Begin("Time domain samples - before sync")) {
+      static auto iq_data = new IQData();
+      // Issue with imgui deferring draw calls until the end of the frame - cases segfault if scatterplot has too many points
+      bool disable_scatterplot = true;
+      static auto time_domain_iq = new IQHist("Time domain samples - before sync", disable_scatterplot);
+      bool new_data = false;
+      if (time_domain_iq->ShouldReadData()) {
+        new_data = iq_data->TryCollect(&scope_array[ueTimeDomainSamplesBeforeSync], t, time_domain_iq->GetEpsilon(), iq_procedure_timer);
+      }
+      time_domain_iq->Draw(iq_data, t, new_data);
+    }
+    ImGui::End();
+  }
+  if (ImScopeShowWindow("Broadcast channel", window_filter)) {
+    if (ImGui::Begin("Broadcast channel")) {
     ImGui::Text("RSRP %d", ue->measurements.ssb_rsrp_dBm[ue->frame_parms.ssb_index]);
     if (ImGui::TreeNode("IQ")) {
       static auto iq_data = new IQData();
@@ -559,8 +684,9 @@ void ShowUeScope(void *data_void_ptr, float t)
       llr_plot->Draw(t, ue->sl_mode ? psbchLlr : pbchLlr, "Broadcast LLR");
       ImGui::TreePop();
     }
+    }
+    ImGui::End();
   }
-  ImGui::End();
 
   // if (ImGui::Begin("RX IQ")) {
   //   static auto common_rx_iq_heatmap = new IQSlotHeatmap(&scope_array[commonRxdataF], "common RX IQ");
@@ -573,9 +699,39 @@ void ShowUeScope(void *data_void_ptr, float t)
   // ImGui::End();
 }
 
-void ShowGnbScope(void *data_void_ptr, float t)
+void ShowGnbScope(void *data_void_ptr, float t, const char *window_filter)
 {
-  (void)data_void_ptr;
+  scopeParms_t *scope_params = (scopeParms_t *)data_void_ptr;
+  PHY_VARS_gNB *gNB = scope_params ? scope_params->gNB : nullptr;
+  static IQData *srs_shared_iq_data = nullptr;
+  static IQHist *srs_iq_hist_flatten = nullptr;
+  static bool read_srs_perlink = false;
+  /* Snapshot of SRS per-link RMS: refreshed only when new gNBSrsChEstimate data is recorded (Read on). Plot always uses this cache. */
+  static std::vector<float> srs_perlink_plot_cache;
+  static int srs_perlink_cached_n_per_link = 0;
+  static int srs_perlink_cached_num_links = 0;
+  static int srs_perlink_cached_n_ap = 0;
+  static bool srs_perlink_plot_has_snapshot = false;
+  static metadata srs_perlink_plot_meta = {-1, -1};
+  static float srs_perlink_plot_ymax = 1.f;
+  if (!srs_shared_iq_data) {
+    srs_shared_iq_data = new IQData();
+    srs_iq_hist_flatten = new IQHist("SRS channel IQ");
+  }
+
+  /* Single TryCollect per frame for gNBSrsChEstimate: both SRS windows share one IQData buffer; the scope slot
+   * only signals is_data_ready once per PHY feed — a second TryCollect in the per-link window always failed. */
+  const bool win_srs_flat = ImScopeShowWindow("SRS channel estimates", window_filter);
+  const bool win_srs_perlink = ImScopeShowWindow("SRS channel estimates (per RX-port link)", window_filter);
+  bool srs_scope_new_data = false;
+  if (scope_array[gNBSrsChEstimate].is_data_ready) {
+    const bool want_srs_collect = (win_srs_flat && srs_iq_hist_flatten->ShouldReadData())
+                                  || (win_srs_perlink && read_srs_perlink);
+    if (want_srs_collect) {
+      srs_scope_new_data =
+          srs_shared_iq_data->TryCollect(&scope_array[gNBSrsChEstimate], t, srs_iq_hist_flatten->GetEpsilon(), iq_procedure_timer);
+    }
+  }
   // if (ImGui::TreeNode("RX IQ")) {
   //   static auto gnb_heatmap = new IQSlotHeatmap(&scope_array[gNBRxdataF], "common RX IQ");
 
@@ -586,35 +742,238 @@ void ShowGnbScope(void *data_void_ptr, float t)
   //                     gNB->frame_parms.N_RB_UL);
   //   ImGui::TreePop();
   // }
-  if (ImGui::Begin("PUSCH SLOT IQ")) {
-    static auto pusch_iq = new IQData();
-    static auto pusch_iq_display = new IQHist("PUSCH compensated IQ");
-    bool new_data = false;
-    if (pusch_iq_display->ShouldReadData()) {
-      new_data = pusch_iq->TryCollect(&scope_array[gNBPuschRxIq], t, pusch_iq_display->GetEpsilon(), iq_procedure_timer);
+  if (ImScopeShowWindow("PUSCH SLOT IQ", window_filter)) {
+    if (ImGui::Begin("PUSCH SLOT IQ")) {
+      static auto pusch_iq = new IQData();
+      static auto pusch_iq_display = new IQHist("PUSCH compensated IQ");
+      bool new_data = false;
+      if (pusch_iq_display->ShouldReadData()) {
+        new_data = pusch_iq->TryCollect(&scope_array[gNBPuschRxIq], t, pusch_iq_display->GetEpsilon(), iq_procedure_timer);
+      }
+      pusch_iq_display->Draw(pusch_iq, t, new_data);
     }
-    pusch_iq_display->Draw(pusch_iq, t, new_data);
+    ImGui::End();
   }
-  ImGui::End();
-
-  if (ImGui::Begin("PUSCH LLRs")) {
-    static auto pusch_llr_plot = new LLRPlot();
-    pusch_llr_plot->Draw(t, gNBPuschLlr, "PUSCH LLR");
-  }
-  ImGui::End();
-
-  if (ImGui::Begin("Time domain samples")) {
-    static auto iq_data = new IQData();
-    // Issue with imgui deferring draw calls until the end of the frame - cases segfault if scatterplot has too many points
-    bool disable_scatterplot = true;
-    static auto time_domain_iq = new IQHist("Time domain samples", disable_scatterplot);
-    bool new_data = false;
-    if (time_domain_iq->ShouldReadData()) {
-      new_data = iq_data->TryCollect(&scope_array[gNbTimeDomainSamples], t, time_domain_iq->GetEpsilon(), iq_procedure_timer);
+  if (ImScopeShowWindow("PUSCH LLRs", window_filter)) {
+    if (ImGui::Begin("PUSCH LLRs")) {
+      static auto pusch_llr_plot = new LLRPlot();
+      pusch_llr_plot->Draw(t, gNBPuschLlr, "PUSCH LLR");
     }
-    time_domain_iq->Draw(iq_data, t, new_data);
+    ImGui::End();
   }
-  ImGui::End();
+  if (ImScopeShowWindow("Time domain samples", window_filter)) {
+    if (ImGui::Begin("Time domain samples")) {
+      static auto iq_data = new IQData();
+      // Issue with imgui deferring draw calls until the end of the frame - cases segfault if scatterplot has too many points
+      bool disable_scatterplot = true;
+      static auto time_domain_iq = new IQHist("Time domain samples", disable_scatterplot);
+      bool new_data = false;
+      if (time_domain_iq->ShouldReadData()) {
+        new_data = iq_data->TryCollect(&scope_array[gNbTimeDomainSamples], t, time_domain_iq->GetEpsilon(), iq_procedure_timer);
+      }
+      time_domain_iq->Draw(iq_data, t, new_data);
+    }
+    ImGui::End();
+  }
+  if (win_srs_flat) {
+    if (ImGui::Begin("SRS channel estimates")) {
+      srs_iq_hist_flatten->Draw(srs_shared_iq_data, t, srs_scope_new_data);
+    }
+    ImGui::End();
+  }
+  if (win_srs_perlink) {
+    if (ImGui::Begin("SRS channel estimates (per RX-port link)")) {
+      ImGui::Checkbox("Read", &read_srs_perlink);
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("When enabled, record SRS scope samples into this window. The plot is updated only when new "
+                          "SRS channel estimate data arrives; between updates the last snapshot is kept.");
+      }
+      const int n_sc = gNB ? gNB->frame_parms.ofdm_symbol_size : 0;
+      int nb_rx = gNB ? gNB->frame_parms.nb_antennas_rx : 0;
+      int n_ap = 0;
+      int n_symb_srs = 0;
+      if (gNB) {
+        for (int i = 0; i < gNB->max_nb_srs; i++) {
+          NR_gNB_SRS_t *srs = &gNB->srs[i];
+          if (srs && srs->active) {
+            n_ap = 1 << srs->srs_pdu.num_ant_ports;
+            n_symb_srs = 1 << srs->srs_pdu.num_symbols;
+            break;
+          }
+        }
+      }
+      /* Refresh snapshot only on new recorded SRS scope data while Read is on (plot draws from cache every frame). */
+      if (read_srs_perlink && srs_scope_new_data && srs_shared_iq_data->len > 0 && n_sc > 0 && nb_rx > 0 && n_ap > 0
+          && n_symb_srs > 0) {
+        const int n_per_link = n_sc * n_symb_srs;
+        const int num_links = srs_shared_iq_data->len / n_per_link;
+        if (n_per_link > 0 && num_links == nb_rx * n_ap && num_links <= 64
+            && (int)srs_shared_iq_data->power.size() == srs_shared_iq_data->len) {
+          srs_perlink_plot_cache = srs_shared_iq_data->power;
+          srs_perlink_cached_n_per_link = n_per_link;
+          srs_perlink_cached_num_links = num_links;
+          srs_perlink_cached_n_ap = n_ap;
+          srs_perlink_plot_meta = srs_shared_iq_data->meta;
+          float m = 0.f;
+          for (float p : srs_perlink_plot_cache) {
+            m = std::max(m, p);
+          }
+          srs_perlink_plot_ymax = std::max(m * 1.1f, 1e-6f);
+          srs_perlink_plot_has_snapshot = true;
+        } else {
+          ImGui::TextColored(ImVec4(1.f, 0.6f, 0.2f, 1.f),
+                             "Unexpected SRS size: len=%d (expected %d coeffs per link x %d links)",
+                             srs_shared_iq_data->len,
+                             n_per_link,
+                             nb_rx * n_ap);
+        }
+      }
+
+      if (srs_perlink_plot_has_snapshot && srs_perlink_cached_n_per_link > 0 && srs_perlink_cached_num_links > 0
+          && (int)srs_perlink_plot_cache.size() >= srs_perlink_cached_num_links * srs_perlink_cached_n_per_link) {
+        const ImVec2 srs_avail = ImGui::GetContentRegionAvail();
+        if (srs_avail.x > 2.f && srs_avail.y > 2.f && ImPlot::BeginPlot("SRS per link (RMS)")) {
+          ImPlot::SetupAxes("Channel coefficient index", "RMS", ImPlotAxisFlags_None, ImPlotAxisFlags_None);
+          ImPlot::SetupAxisLimits(ImAxis_X1,
+                                  0,
+                                  (double)std::max(0, srs_perlink_cached_n_per_link - 1),
+                                  ImGuiCond_Always);
+          ImPlot::SetupAxisLimits(ImAxis_Y1, 0, (double)srs_perlink_plot_ymax, ImGuiCond_Always);
+          const int n_ap = srs_perlink_cached_n_ap;
+          for (int link = 0; link < srs_perlink_cached_num_links; link++) {
+            int rx = link / n_ap;
+            int port = link % n_ap;
+            char label[32];
+            snprintf(label, sizeof(label), "RX%d-Port%d", rx, port);
+            ImPlot::PlotLine(label,
+                             srs_perlink_plot_cache.data() + link * srs_perlink_cached_n_per_link,
+                             srs_perlink_cached_n_per_link);
+          }
+          ImPlot::EndPlot();
+        }
+        if (srs_perlink_plot_meta.slot != -1 || srs_perlink_plot_meta.frame != -1) {
+          ImGui::Text("Snapshot: frame %d  slot %d  (updates only on new SRS estimate)",
+                      srs_perlink_plot_meta.frame,
+                      srs_perlink_plot_meta.slot);
+        }
+      } else if (!read_srs_perlink) {
+        ImGui::TextUnformatted("Enable Read, then open \"SRS channel estimates\" or rely on this window to collect "
+                               "when the flat window is hidden.");
+      } else {
+        ImGui::TextUnformatted("Waiting for first SRS channel estimate snapshot…");
+      }
+    }
+    ImGui::End();
+  }
+  /* CSI report parameters (RI, PMI, CQI, RSRP, SINR) – data fed from MAC when a report is decoded */
+  if (ImScopeShowWindow("CSI report parameters", window_filter)) {
+    if (ImGui::Begin("CSI report parameters")) {
+      static csi_report_scope_payload_t last_csi = {};
+      static bool has_csi = false;
+      ImScopeDataWrapper &w = scope_array[gNBCsiReportParams];
+      if (w.is_data_ready && w.data.scope_graph_data != nullptr) {
+        size_t payload_sz = sizeof(csi_report_scope_payload_t);
+        if (w.data.scope_graph_data->dataSize >= (int)payload_sz) {
+          memcpy(&last_csi, (const char *)(w.data.scope_graph_data + 1), payload_sz);
+          has_csi = true;
+        }
+        w.is_data_ready = false;
+      }
+      if (has_csi) {
+        ImGui::Text("Frame %d  Slot %d  RNTI 0x%04x", last_csi.frame, last_csi.slot, last_csi.rnti);
+        /* RI is stored 0-based (0=1 layer, …, 3=4 layers); display as number of layers to match UE / MAC decode. */
+        ImGui::Text("CSI RI %u (preferred DL layers)   CQI %u   PMI (x1=%u x2=%u)",
+                    (unsigned)(last_csi.ri + 1u),
+                    (unsigned)last_csi.cqi,
+                    (unsigned)last_csi.pmi_x1,
+                    (unsigned)last_csi.pmi_x2);
+        ImGui::Text("Cell DL MIMO: max PDSCH layers %u   logical DL ports %u (when both are 4, 4-layer CSI/MIMO is configured)",
+                    (unsigned)last_csi.max_dl_mimo_layers,
+                    (unsigned)last_csi.pdsch_logical_ports);
+        /* CQI report does not include SINR in UCI; UE only sends CQI. SINR is filled only when SINR report type is used. */
+        if (last_csi.sinr_dB != 0) {
+          ImGui::Text("RSRP %d dBm   SINR %d dB   Report ID %u", last_csi.rsrp_dBm, last_csi.sinr_dB, last_csi.csi_report_id);
+        } else {
+          ImGui::Text("RSRP %d dBm   SINR N/A (not in CQI report)   Report ID %u", last_csi.rsrp_dBm, last_csi.csi_report_id);
+        }
+        ImGui::Separator();
+        ImGui::TextUnformatted("AI runtime CSI (MAC snapshot at this decoded report)");
+        {
+          const char *mode_str = "off";
+          if (last_csi.ai_sched_mode == 1)
+            mode_str = "1=bundled UL-SCH / PUCCH AI tuple";
+          else if (last_csi.ai_sched_mode == 2)
+            mode_str = "2=mode-2 (AI replaces legacy CSI payload)";
+          ImGui::Text("Runtime sched mode: %u (%s)", (unsigned)last_csi.ai_sched_mode, mode_str);
+        }
+        ImGui::Text("AI tuple valid %u   fresh %u   last update frame %u slot %u",
+                    (unsigned)last_csi.ai_runtime_tuple_valid,
+                    (unsigned)last_csi.ai_runtime_tuple_fresh,
+                    (unsigned)last_csi.ai_runtime_origin_frame,
+                    (unsigned)last_csi.ai_runtime_origin_slot);
+        if (last_csi.ai_runtime_age_slots == 0xFFFFu) {
+          ImGui::TextUnformatted("Age since AI tuple update: N/A (no valid tuple)");
+        } else {
+          ImGui::Text("Age since AI tuple update: %u slots", (unsigned)last_csi.ai_runtime_age_slots);
+        }
+        ImGui::Text("Stored AI RI %u (layers)   CQI %u   PMI (x1=%u x2=%u)",
+                    (unsigned)(last_csi.ai_runtime_ri + 1u),
+                    (unsigned)last_csi.ai_runtime_cqi,
+                    (unsigned)last_csi.ai_runtime_pmi_x1,
+                    (unsigned)last_csi.ai_runtime_pmi_x2);
+        {
+          const bool tuple_valid = last_csi.ai_runtime_tuple_valid != 0;
+          const char *ri_match = tuple_valid
+                                     ? (last_csi.ai_ri_match_decode_vs_runtime == 1 ? "yes" : "no")
+                                     : "N/A (AI tuple invalid)";
+          const char *pmi_match = tuple_valid
+                                      ? (last_csi.ai_pmi_match_decode_vs_runtime == 1 ? "yes" : "no")
+                                      : "N/A (AI tuple invalid)";
+          ImGui::Text("Decode vs AI runtime - RI match: %s   PMI match: %s", ri_match, pmi_match);
+          if (tuple_valid) {
+            ImGui::Text("CQI delta (AI minus decode): %d", (int)last_csi.ai_cqi_delta_ai_minus_decode);
+          } else {
+            ImGui::TextUnformatted("CQI delta (AI minus decode): N/A (AI tuple invalid)");
+          }
+        }
+        if (last_csi.ai_runtime_override_disagrees_decode) {
+          ImGui::TextColored(ImVec4(1.f, 0.85f, 0.2f, 1.f),
+                             "Override active: fresh AI tuple differs from decoded CSI (DL uses AI per policy).");
+        } else {
+          ImGui::TextUnformatted("Override vs decode: no disagreement under current mode/freshness (or mode off).");
+        }
+        {
+          const uint64_t override_used = (uint64_t)last_csi.ai_runtime_override_used;
+          const uint64_t fb_missing = (uint64_t)last_csi.ai_runtime_fallback_missing;
+          const uint64_t fb_stale = (uint64_t)last_csi.ai_runtime_fallback_stale;
+          const uint64_t fb_incomplete = (uint64_t)last_csi.ai_runtime_fallback_incomplete;
+          const uint64_t fallback_total = fb_missing + fb_stale + fb_incomplete;
+          const uint64_t total_decisions = override_used + fallback_total;
+          const double total_d = total_decisions > 0 ? (double)total_decisions : 1.0;
+          const double fb_rate = total_decisions > 0 ? (100.0 * (double)fallback_total / total_d) : 0.0;
+          const double miss_rate = total_decisions > 0 ? (100.0 * (double)fb_missing / total_d) : 0.0;
+          const double stale_rate = total_decisions > 0 ? (100.0 * (double)fb_stale / total_d) : 0.0;
+          const double incomplete_rate = total_decisions > 0 ? (100.0 * (double)fb_incomplete / total_d) : 0.0;
+          ImGui::Text("Runtime decision samples: %llu", (unsigned long long)total_decisions);
+          ImGui::Text("Override used: %u", (unsigned)last_csi.ai_runtime_override_used);
+          ImGui::Text("Fallback total: %llu (%.2f%%) [missing %.2f%%, stale %.2f%%, incomplete %.2f%%]",
+                      (unsigned long long)fallback_total,
+                      fb_rate,
+                      miss_rate,
+                      stale_rate,
+                      incomplete_rate);
+        }
+        ImGui::Text("Counters — override_used %u   fallback missing %u   stale %u   incomplete %u",
+                    (unsigned)last_csi.ai_runtime_override_used,
+                    (unsigned)last_csi.ai_runtime_fallback_missing,
+                    (unsigned)last_csi.ai_runtime_fallback_stale,
+                    (unsigned)last_csi.ai_runtime_fallback_incomplete);
+      } else {
+        ImGui::TextUnformatted("No CSI report received yet.");
+      }
+    }
+    ImGui::End(); /* always call: ImGui requires End() for every Begin(), even when Begin() returned false (e.g. window collapsed/moved) */
+  }
 }
 
 void ShowIQFileViewer(void *data_void_ptr)
@@ -721,9 +1080,11 @@ void *imscope_thread(void *data_void_ptr)
     ImGui_ImplGlfw_NewFrame();
 
     static bool reset_ini_settings = false;
+    static bool filtered_layout_applied = false;
     if (reset_ini_settings) {
       ImGui::LoadIniSettingsFromDisk("imscope-init.ini");
       reset_ini_settings = false;
+      filtered_layout_applied = false; /* re-apply filtered dock layout next frame if --imscope-windows is set */
     }
     ImGui::NewFrame();
 
@@ -734,7 +1095,38 @@ void *imscope_thread(void *data_void_ptr)
     static bool show_imgui_demo_window = false;
     static bool show_implot_demo_window = false;
     static bool show_scope_settings_window = false;
-    ImGui::DockSpaceOverViewport();
+    ImGuiID dockspace_id = ImGui::DockSpaceOverViewport();
+
+    const char *window_filter = nullptr;
+    if (data_void_ptr) {
+      if (is_ue) {
+        PHY_VARS_NR_UE *ue = (PHY_VARS_NR_UE *)data_void_ptr;
+        if (ue->scopeData) {
+          scopeData_t *scope = (scopeData_t *)ue->scopeData;
+          window_filter = scope->imscope_windows;
+        }
+      } else if (is_gnb) {
+        scopeParms_t *parms = (scopeParms_t *)data_void_ptr;
+        if (parms->gNB && parms->gNB->scopeData) {
+          scopeData_t *scope = (scopeData_t *)parms->gNB->scopeData;
+          window_filter = scope->imscope_windows;
+        }
+      }
+    }
+
+    /* When --imscope-windows is set, dock filtered windows into the main area so they appear as tabs at startup */
+    if (window_filter && window_filter[0] != '\0' && !filtered_layout_applied) {
+      filtered_layout_applied = true;
+      std::vector<std::string> titles;
+      ImScopeParseFilterTitles(window_filter, titles);
+      if (!titles.empty()) {
+        for (const std::string &title : titles)
+          ImGui::DockBuilderDockWindow(title.c_str(), dockspace_id);
+        ImGui::DockBuilderDockWindow("Status bar", dockspace_id);
+        ImGui::DockBuilderFinish(dockspace_id);
+      }
+    }
+
     if (ImGui::BeginMainMenuBar()) {
       if (ImGui::BeginMenu("File")) {
         if (ImGui::MenuItem("Close scope")) {
@@ -767,15 +1159,22 @@ void *imscope_thread(void *data_void_ptr)
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("Total time used in PHY threads for copying out IQ data for the scope, in uS, averaged over 1 ms");
     }
+    if (window_filter && window_filter[0] != '\0') {
+      ImGui::SameLine();
+      ImGui::Text("| Windows: %s (--imscope-windows)", window_filter);
+    } else {
+      ImGui::SameLine();
+      ImGui::Text("| Windows: all");
+    }
     ImGui::End();
 
     t += ImGui::GetIO().DeltaTime;
     iq_procedure_timer.UpdateAverage(t);
 
     if (is_ue) {
-      ShowUeScope(data_void_ptr, t);
+      ShowUeScope(data_void_ptr, t, window_filter);
     } else if (is_gnb) {
-      ShowGnbScope(data_void_ptr, t);
+      ShowGnbScope(data_void_ptr, t, window_filter);
     } else {
       ShowIQFileViewer(data_void_ptr);
     }

@@ -29,6 +29,14 @@
  * @ingroup _mac
  */
 
+#include <errno.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/time.h>
+
 #include <softmodem-common.h>
 #include "assertions.h"
 
@@ -53,6 +61,10 @@
 #include "SIMULATION/TOOLS/sim.h" // for taus
 
 #define ENABLE_MAC_PAYLOAD_DEBUG
+
+/* gNB CSI-RS scheduling recording for monitoring (same dir as gnb_csi_feedback.csv) */
+static pthread_mutex_t gnb_csi_record_mutex = PTHREAD_MUTEX_INITIALIZER;
+static int gnb_csirs_csv_header_done = 0;
 
 #include "common/ran_context.h"
 #include "nfapi/oai_integration/vendor_ext.h"
@@ -139,6 +151,8 @@ uint8_t get_dl_nrOfLayers(const NR_UE_sched_ctrl_t *sched_ctrl, const nr_dci_for
   // if there is not csi report activated RI is 0 from initialization
   if(dci_format == NR_DL_DCI_FORMAT_1_0)
     return 1;
+  else if (get_softmodem_params()->ai_fb_runtime_sched_mode != 0 && sched_ctrl->ai_fb_runtime_tuple_fresh)
+    return sched_ctrl->ai_fb_runtime_ri + 1;
   else
     return sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.ri + 1;
 }
@@ -197,19 +211,27 @@ uint16_t get_pm_index(const gNB_MAC_INST *nrmac,
                       int layers,
                       int xp_pdsch_antenna_ports)
 {
-  if (dci_format == NR_DL_DCI_FORMAT_1_0 || nrmac->identity_pm || xp_pdsch_antenna_ports == 1)
-    return 0; //identity matrix (basic 5G configuration handled by PMI report is with XP antennas)
+  (void)xp_pdsch_antenna_ports;
+  const nr_pdsch_AntennaPorts_t *ap = &nrmac->radio_config.pdsch_AntennaPorts;
+  const int tot_logical_ports = ap->N1 * ap->N2 * ap->XP;
+  if (dci_format == NR_DL_DCI_FORMAT_1_0 || nrmac->identity_pm || tot_logical_ports < 2)
+    return 0;
   const NR_UE_sched_ctrl_t *sched_ctrl = &UE->UE_sched_ctrl;
   const int report_id = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.csi_report_id;
   const nr_csi_report_t *csi_report = &UE->csi_report_template[report_id];
-  const int N1 = csi_report->N1;
-  const int N2 = csi_report->N2;
-  const int antenna_ports = (N1 * N2) << 1;
+  /* Precoding matrix layout follows gNB antenna layout (must match init_DL_MIMO_codebook). */
+  const int N1 = ap->N1;
+  const int N2 = ap->N2;
+  const int antenna_ports = tot_logical_ports;
   if (antenna_ports < 2)
     return 0; // single antenna port
 
   int x1 = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x1;
-  const int x2 = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x2;
+  int x2 = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x2;
+  if (get_softmodem_params()->ai_fb_runtime_sched_mode != 0 && sched_ctrl->ai_fb_runtime_tuple_fresh) {
+    x1 = sched_ctrl->ai_fb_runtime_pmi_x1;
+    x2 = sched_ctrl->ai_fb_runtime_pmi_x2;
+  }
   LOG_D(NR_MAC,"PMI report: x1 %d x2 %d layers: %d\n", x1, x2, layers);
 
   int prev_layers_size = 0;
@@ -254,6 +276,83 @@ uint16_t get_pm_index(const gNB_MAC_INST *nrmac,
     lay_index = i2 + (i11 * max_i2) + (i12 * max_i2 * N1 * O1) + (k1 * max_i2 * N1 * O1 * N2 * O2) + (k2 * max_i2 * N1 * O1 * N2 * O2 * K1);
     return 1 + prev_layers_size + lay_index;
   }
+}
+
+void ai_fb_runtime_refresh_sched_tuple(const gNB_MAC_INST *nrmac, NR_UE_sched_ctrl_t *sched_ctrl, frame_t frame, slot_t slot)
+{
+  /* Keep runtime selector logs periodic to avoid per-slot log flooding. */
+  const bool runtime_log_enable = get_softmodem_params()->ai_fb_runtime_log_enable != 0;
+  const int log_period_frames = get_softmodem_params()->ai_fb_runtime_log_period_frames;
+  const bool periodic_log = runtime_log_enable && (log_period_frames > 0) && (slot == 0) && ((frame % log_period_frames) == 0);
+  if (get_softmodem_params()->ai_fb_runtime_sched_mode == 0) {
+    sched_ctrl->ai_fb_runtime_tuple_fresh = false;
+    return;
+  }
+  if (!sched_ctrl->ai_fb_runtime_tuple_valid) {
+    sched_ctrl->ai_fb_runtime_tuple_fresh = false;
+    sched_ctrl->ai_fb_runtime_fallback_missing++;
+    if (periodic_log) {
+      LOG_I(NR_MAC,
+            "\x1b[33mAI runtime scheduling fallback: missing AI tuple (fallback_missing=%u)\x1b[0m\n",
+            sched_ctrl->ai_fb_runtime_fallback_missing);
+    }
+    return;
+  }
+
+  const int slots_per_frame = nrmac->frame_structure.numb_slots_frame;
+  const int sfn_mod = 1024;
+  const int now_abs = frame * slots_per_frame + slot;
+  const int ai_abs = sched_ctrl->ai_fb_runtime_frame * slots_per_frame + sched_ctrl->ai_fb_runtime_slot;
+  int age_slots = now_abs - ai_abs;
+  if (age_slots < 0)
+    age_slots += sfn_mod * slots_per_frame;
+  const bool fresh = age_slots <= get_softmodem_params()->ai_fb_runtime_sched_max_age_slots;
+  if (!fresh) {
+    sched_ctrl->ai_fb_runtime_tuple_fresh = false;
+    sched_ctrl->ai_fb_runtime_fallback_stale++;
+    if (periodic_log) {
+      LOG_I(NR_MAC,
+            "\x1b[33mAI runtime scheduling fallback: stale AI tuple age_slots=%d threshold=%d (fallback_stale=%u)\x1b[0m\n",
+            age_slots,
+            get_softmodem_params()->ai_fb_runtime_sched_max_age_slots,
+            sched_ctrl->ai_fb_runtime_fallback_stale);
+    }
+    return;
+  }
+  if (get_softmodem_params()->ai_fb_runtime_sched_require_full &&
+      (sched_ctrl->ai_fb_runtime_ri > 7 || sched_ctrl->ai_fb_runtime_cqi > 15)) {
+    sched_ctrl->ai_fb_runtime_tuple_fresh = false;
+    sched_ctrl->ai_fb_runtime_fallback_incomplete++;
+    if (periodic_log) {
+      LOG_I(NR_MAC,
+            "\x1b[33mAI runtime scheduling fallback: incomplete AI tuple ri=%u cqi=%u (fallback_incomplete=%u)\x1b[0m\n",
+            (unsigned)sched_ctrl->ai_fb_runtime_ri,
+            (unsigned)sched_ctrl->ai_fb_runtime_cqi,
+            sched_ctrl->ai_fb_runtime_fallback_incomplete);
+    }
+    return;
+  }
+  sched_ctrl->ai_fb_runtime_tuple_fresh = true;
+  sched_ctrl->ai_fb_runtime_override_used++;
+  if (periodic_log) {
+    LOG_I(NR_MAC,
+          "\x1b[33mAI runtime scheduling override active: ri=%u pmi=(0x%x,0x%x) cqi=%u (override_used=%u)\x1b[0m\n",
+          (unsigned)sched_ctrl->ai_fb_runtime_ri,
+          (unsigned)sched_ctrl->ai_fb_runtime_pmi_x1,
+          (unsigned)sched_ctrl->ai_fb_runtime_pmi_x2,
+          (unsigned)sched_ctrl->ai_fb_runtime_cqi,
+          sched_ctrl->ai_fb_runtime_override_used);
+  }
+}
+
+int ai_fb_runtime_get_effective_dl_max_mcs(const NR_UE_info_t *UE, const NR_UE_sched_ctrl_t *sched_ctrl)
+{
+  if (get_softmodem_params()->ai_fb_runtime_sched_mode != 0 && sched_ctrl->ai_fb_runtime_tuple_fresh) {
+    const int mcs_table = UE->current_DL_BWP.mcsTableIdx;
+    const int cqi_table = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.cqi_table;
+    return get_mcs_from_cqi(mcs_table, cqi_table, sched_ctrl->ai_fb_runtime_cqi);
+  }
+  return sched_ctrl->dl_max_mcs;
 }
 
 // look-up table for AMC. Based on BLER vs SNR curves from the nr_dlsim simulation
@@ -3427,6 +3526,35 @@ void nr_csirs_scheduling(int Mod_idP, frame_t frame, slot_t slot, nfapi_nr_dl_tt
               break;
           default:
             AssertFatal(1==0,"Invalid freqency domain allocation in CSI-RS resource\n");
+          }
+          /* Record CSI-RS scheduling for monitoring when csi_record_path is set; timestamp_utc_us for time-sync with UE recordings */
+          {
+            const char *base = get_softmodem_params()->csi_record_path;
+            if (base && base[0] != '\0') {
+              struct timeval tv;
+              gettimeofday(&tv, NULL);
+              int64_t timestamp_utc_us = (int64_t)tv.tv_sec * 1000000 + (int64_t)tv.tv_usec;
+              pthread_mutex_lock(&gnb_csi_record_mutex);
+              if (mkdir(base, 0755) < 0 && errno != EEXIST) {}
+              else {
+                char path[512];
+                snprintf(path, sizeof(path), "%s/gnb_csirs_scheduling.csv", base);
+                FILE *f = fopen(path, "a");
+                if (f) {
+                  if (!gnb_csirs_csv_header_done) {
+                    fprintf(f, "timestamp_utc_us,frame,slot,rnti,resource_id,start_rb,nr_of_rbs,row,symb_l0,symb_l1,cdm_type,freq_density,scramb_id\n");
+                    gnb_csirs_csv_header_done = 1;
+                  }
+                  fprintf(f, "%ld,%d,%d,%u,%ld,%u,%u,%u,%u,%u,%u,%u,%u\n",
+                          (long)timestamp_utc_us, frame, slot, (unsigned)UE->rnti, (long)nzpcsi->nzp_CSI_RS_ResourceId,
+                          csirs_pdu_rel15->start_rb, csirs_pdu_rel15->nr_of_rbs, csirs_pdu_rel15->row,
+                          csirs_pdu_rel15->symb_l0, csirs_pdu_rel15->symb_l1,
+                          csirs_pdu_rel15->cdm_type, csirs_pdu_rel15->freq_density, csirs_pdu_rel15->scramb_id);
+                  fclose(f);
+                }
+              }
+              pthread_mutex_unlock(&gnb_csi_record_mutex);
+            }
           }
           dl_req->nPDUs++;
         }

@@ -1525,11 +1525,19 @@ void nr_ue_process_l1_measurements(NR_UE_MAC_INST_t *mac, frame_t frame, int slo
     mac->ssb_measurements[ssb_index].ssb_rsrp_dBm = l1_measurements->rsrp_dBm;
     mac->ssb_measurements[ssb_index].ssb_sinr_dB = l1_measurements->sinr_dB;
   } else if (csi_meas) {
+    mac->csi_obs_seq++;
     mac->csirs_measurements.rsrp_dBm = l1_measurements->rsrp_dBm;
     mac->csirs_measurements.i1 = l1_measurements->i1;
     mac->csirs_measurements.i2 = l1_measurements->i2;
     mac->csirs_measurements.cqi = l1_measurements->cqi;
     mac->csirs_measurements.ri = l1_measurements->rank_indicator;
+    mac->ai_fb_valid = l1_measurements->ai_fb_valid;
+    if (mac->ai_fb_valid) {
+      memcpy(mac->ai_fb_payload, l1_measurements->ai_fb_payload, NR_AI_CSI_FB_LATENT_BYTES);
+      mac->ai_fb_frame = frame;
+      mac->ai_fb_slot = slot;
+      mac->ai_fb_obs_seq = mac->csi_obs_seq;
+    }
   }
   nr_mac_rrc_meas_ind_ue(mac->ue_id,
                          l1_measurements->gNB_index,
@@ -2942,47 +2950,134 @@ static nfapi_nr_ue_csi_payload_t get_csirs_RI_PMI_CQI_payload(NR_UE_MAC_INST_t *
           AssertFatal(csi_report, "Couldn't find CSI report with ID %ld\n", csi_reportconfig->reportConfigId);
           int cri_bitlen = csi_report->csi_meas_bitlen.cri_bitlen;
           int ri_bitlen = csi_report->csi_meas_bitlen.ri_bitlen;
-          int pmi_x1_bitlen = csi_report->csi_meas_bitlen.pmi_x1_bitlen[mac->csirs_measurements.ri];
-          int pmi_x2_bitlen = csi_report->csi_meas_bitlen.pmi_x2_bitlen[mac->csirs_measurements.ri];
-          int cqi_bitlen = csi_report->csi_meas_bitlen.cqi_bitlen[mac->csirs_measurements.ri];
+          const uint8_t ri_raw = mac->csirs_measurements.ri;
+          const uint8_t ri_restriction = csi_report->csi_meas_bitlen.ri_restriction;
+          int ri_index_from_raw = -1;
+          int allowed_rank_count = 0;
+          int highest_allowed_rank = 0;
+          {
+            int count = 0;
+            for (int i = 0; i < 8; i++) {
+              if ((ri_restriction >> i) & 0x01) {
+                highest_allowed_rank = i;
+                if (i == ri_raw) {
+                  ri_index_from_raw = count;
+                }
+                count++;
+              }
+            }
+            allowed_rank_count = count;
+          }
+          /* RI in CSI payload is an index over allowed ranks (ri_restriction), not the raw rank value itself. */
+          const uint8_t ri_rank_for_payload = (ri_index_from_raw >= 0) ? ri_raw : highest_allowed_rank;
+          const uint8_t ri_field_sent = (ri_index_from_raw >= 0) ? (uint8_t)ri_index_from_raw : (uint8_t)(allowed_rank_count - 1);
+          int pmi_x1_bitlen = csi_report->csi_meas_bitlen.pmi_x1_bitlen[ri_rank_for_payload];
+          int pmi_x2_bitlen = csi_report->csi_meas_bitlen.pmi_x2_bitlen[ri_rank_for_payload];
+          int cqi_bitlen = csi_report->csi_meas_bitlen.cqi_bitlen[ri_rank_for_payload];
           int padding_bitlen = 0;
           // TODO: Improvements will be needed to cri_bitlen>0 and pmi_x1_bitlen>0
+          uint64_t temp_payload_1_unreversed = 0;
+          uint64_t temp_payload_2_unreversed = 0;
           if (mapping_type == ON_PUSCH) {
             p1_bits = cri_bitlen + ri_bitlen + cqi_bitlen;
             p2_bits = pmi_x1_bitlen + pmi_x2_bitlen;
-            temp_payload_1 = (0/*mac->csi_measurements.cri*/ << (cqi_bitlen + ri_bitlen)) |
-                             (mac->csirs_measurements.ri << cqi_bitlen) |
-                             (mac->csirs_measurements.cqi);
-            temp_payload_2 = (mac->csirs_measurements.i1 << pmi_x2_bitlen) |
-                             mac->csirs_measurements.i2;
+            temp_payload_1_unreversed = (0/*mac->csi_measurements.cri*/ << (cqi_bitlen + ri_bitlen)) |
+                                        (ri_field_sent << cqi_bitlen) |
+                                        (mac->csirs_measurements.cqi);
+            temp_payload_2_unreversed = (mac->csirs_measurements.i1 << pmi_x2_bitlen) |
+                                        mac->csirs_measurements.i2;
+            temp_payload_1 = temp_payload_1_unreversed;
+            temp_payload_2 = temp_payload_2_unreversed;
           }
           else {
             p1_bits = nr_get_csi_bitlen(csi_report);
             padding_bitlen = p1_bits - (cri_bitlen + ri_bitlen + pmi_x1_bitlen + pmi_x2_bitlen + cqi_bitlen);
-            temp_payload_1 = (0/*mac->csi_measurements.cri*/ << (cqi_bitlen + pmi_x2_bitlen + pmi_x1_bitlen + padding_bitlen + ri_bitlen)) |
-                             (mac->csirs_measurements.ri << (cqi_bitlen + pmi_x2_bitlen + pmi_x1_bitlen + padding_bitlen)) |
-                             (mac->csirs_measurements.i1 << (cqi_bitlen + pmi_x2_bitlen)) |
-                             (mac->csirs_measurements.i2 << (cqi_bitlen)) |
-                             (mac->csirs_measurements.cqi);
+            temp_payload_1_unreversed = (0/*mac->csi_measurements.cri*/ << (cqi_bitlen + pmi_x2_bitlen + pmi_x1_bitlen + padding_bitlen + ri_bitlen)) |
+                                        (ri_field_sent << (cqi_bitlen + pmi_x2_bitlen + pmi_x1_bitlen + padding_bitlen)) |
+                                        (mac->csirs_measurements.i1 << (cqi_bitlen + pmi_x2_bitlen)) |
+                                        (mac->csirs_measurements.i2 << (cqi_bitlen)) |
+                                        (mac->csirs_measurements.cqi);
+            temp_payload_1 = temp_payload_1_unreversed;
           }
 
           temp_payload_1 = reverse_bits(temp_payload_1, p1_bits);
           temp_payload_2 = reverse_bits(temp_payload_2, p2_bits);
-          LOG_D(NR_MAC, "cri_bitlen = %d\n", cri_bitlen);
-          LOG_D(NR_MAC, "ri_bitlen = %d\n", ri_bitlen);
-          LOG_D(NR_MAC, "pmi_x1_bitlen = %d\n", pmi_x1_bitlen);
-          LOG_D(NR_MAC, "pmi_x2_bitlen = %d\n", pmi_x2_bitlen);
-          LOG_D(NR_MAC, "cqi_bitlen = %d\n", cqi_bitlen);
-          LOG_D(NR_MAC, "csi_part1_payload = 0x%lx\n", temp_payload_1);
-          LOG_D(NR_MAC, "csi_part2_payload = 0x%lx\n", temp_payload_2);
-          LOG_D(NR_MAC, "part1_bits = %d\n", p1_bits);
-          LOG_D(NR_MAC, "part2_bits = %d\n", p2_bits);
+          if (get_softmodem_params()->print_csi_debug) {
+            LOG_I(NR_MAC, "cri_bitlen = %d\n", cri_bitlen);
+            LOG_I(NR_MAC, "ri_bitlen = %d\n", ri_bitlen);
+            LOG_I(NR_MAC, "pmi_x1_bitlen = %d\n", pmi_x1_bitlen);
+            LOG_I(NR_MAC, "pmi_x2_bitlen = %d\n", pmi_x2_bitlen);
+            LOG_I(NR_MAC, "cqi_bitlen = %d\n", cqi_bitlen);
+            LOG_I(NR_MAC, "csi_part1_payload = 0x%lx\n", temp_payload_1);
+            LOG_I(NR_MAC, "csi_part2_payload = 0x%lx\n", temp_payload_2);
+            LOG_I(NR_MAC, "part1_bits = %d\n", p1_bits);
+            LOG_I(NR_MAC, "part2_bits = %d\n", p2_bits);
+            LOG_I(NR_MAC,
+                  "UE CSI pack fields: mapping=%s, ri_field_shift=%d, pmi_x1_shift=%d, pmi_x2_shift=%d, cqi_shift=0, padding=%d\n",
+                  mapping_type == ON_PUSCH ? "ON_PUSCH" : "ON_PUCCH",
+                  cqi_bitlen + pmi_x2_bitlen + pmi_x1_bitlen + padding_bitlen,
+                  cqi_bitlen + pmi_x2_bitlen,
+                  cqi_bitlen,
+                  padding_bitlen);
+            LOG_I(NR_MAC,
+                  "UE CSI pack values: RI_field=0x%x, PMI_x1=0x%x, PMI_x2=0x%x, CQI=0x%x, part1_pre_reverse=0x%lx, part2_pre_reverse=0x%lx\n",
+                  (unsigned)ri_field_sent,
+                  (unsigned)mac->csirs_measurements.i1,
+                  (unsigned)mac->csirs_measurements.i2,
+                  (unsigned)mac->csirs_measurements.cqi,
+                  temp_payload_1_unreversed,
+                  temp_payload_2_unreversed);
+            LOG_I(NR_MAC,
+                  "UE CSI RI trace: RI_raw=%u (layers=%u), ri_restriction=0x%02x, RI_field_sent=%u (index), RI_index_from_raw=%d, RI_rank_for_payload=%u (layers=%u)\n",
+                  (unsigned)ri_raw,
+                  (unsigned)ri_raw + 1u,
+                  (unsigned)ri_restriction,
+                  (unsigned)ri_field_sent,
+                  ri_index_from_raw,
+                  (unsigned)ri_rank_for_payload,
+                  (unsigned)ri_rank_for_payload + 1u);
+            LOG_I(NR_MAC,
+                  "UE CSI PMI trace: RI_payload_rank=%u, i1(pmi_x1)=0x%x, i2(pmi_x2)=0x%x, x1_bitlen=%d, x2_bitlen=%d, cqi=%u\n",
+                  (unsigned)ri_rank_for_payload + 1u,
+                  (unsigned)mac->csirs_measurements.i1,
+                  (unsigned)mac->csirs_measurements.i2,
+                  pmi_x1_bitlen,
+                  pmi_x2_bitlen,
+                  (unsigned)mac->csirs_measurements.cqi);
+          }
           break;
         }
       }
     }
   }
-  AssertFatal(p1_bits <= 32 && p2_bits <= 32, "Not supporting CSI report with more than 32 bits\n");
+  if (get_softmodem_params()->ai_fb_runtime_sched_mode == 2 && get_softmodem_params()->ai_fb_ulsch_enable && mac->ai_fb_valid) {
+    const int legacy_p1_bits = p1_bits;
+    const int ai_latent_bits = NR_AI_CSI_FB_LATENT_BYTES * 8;
+    uint64_t latent_payload = 0;
+    for (int b = 0; b < NR_AI_CSI_FB_LATENT_BYTES; b++)
+      latent_payload |= ((uint64_t)mac->ai_fb_payload[b] << (8 * b));
+    if (legacy_p1_bits >= ai_latent_bits) {
+      p1_bits = ai_latent_bits;
+      p2_bits = 0;
+      temp_payload_1 = latent_payload;
+      temp_payload_2 = 0;
+      if (get_softmodem_params()->print_csi_debug) {
+        LOG_I(NR_MAC,
+              "UE CSI payload replace mode: using AI latent in legacy CSI path (p1_bits=%d, payload=0x%lx)\n",
+              p1_bits,
+              temp_payload_1);
+      }
+    } else {
+      static uint32_t ai_payload_replace_skipped = 0;
+      ai_payload_replace_skipped++;
+      LOG_W(NR_MAC,
+            "UE CSI payload replace fallback: legacy CSI part1 budget too small (%d bits < AI latent %d bits), using legacy payload (fallback_count=%u)\n",
+            legacy_p1_bits,
+            ai_latent_bits,
+            ai_payload_replace_skipped);
+    }
+  }
+  AssertFatal(p1_bits <= 64 && p2_bits <= 64, "Not supporting CSI report with more than 64 bits\n");
   nfapi_nr_ue_csi_payload_t csi = {.part1_payload = temp_payload_1, .part2_payload = temp_payload_2, .p1_bits = p1_bits, csi.p2_bits = p2_bits};
   return csi;
 }
