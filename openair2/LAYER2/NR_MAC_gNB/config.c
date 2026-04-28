@@ -148,21 +148,24 @@ int precoding_weigths_generation(nfapi_nr_pm_list_t *mat,
                       weights->r,
                       weights->i);
               }
-              for (int i_rows = N1 * N2; i_rows < 2 * N1 * N2; i_rows++) {
-                nfapi_nr_pm_weights_t *weights = &mat->pmi_pdu[pmiq].weights[j_col][i_rows];
-                res_code = sqrt(1 / (double)L) * (phase_sign)*theta_n[nn] * v_lm[llc][mmc][i_rows - N1 * N2];
-                c16_t precoder_weight = convert_precoder_weight(res_code);
-                *weights = precoder_weight;
-                LOG_D(PHY,
-                      "%d Layer Precoding Matrix[pmi %d][antPort %d][layerIdx %d]= %f+j %f -> Fixed Point %d+j %d \n",
-                      L,
-                      pmiq,
-                      i_rows,
-                      j_col,
-                      creal(res_code),
-                      cimag(res_code),
-                      weights->r,
-                      weights->i);
+              /* Second polarization block only when logical ports include XP (num_antenna_ports > N1*N2). */
+              if (num_antenna_ports > N1 * N2) {
+                for (int i_rows = N1 * N2; i_rows < 2 * N1 * N2; i_rows++) {
+                  nfapi_nr_pm_weights_t *weights = &mat->pmi_pdu[pmiq].weights[j_col][i_rows];
+                  res_code = sqrt(1 / (double)L) * (phase_sign)*theta_n[nn] * v_lm[llc][mmc][i_rows - N1 * N2];
+                  c16_t precoder_weight = convert_precoder_weight(res_code);
+                  *weights = precoder_weight;
+                  LOG_D(PHY,
+                        "%d Layer Precoding Matrix[pmi %d][antPort %d][layerIdx %d]= %f+j %f -> Fixed Point %d+j %d \n",
+                        L,
+                        pmiq,
+                        i_rows,
+                        j_col,
+                        creal(res_code),
+                        cimag(res_code),
+                        weights->r,
+                        weights->i);
+                }
               }
             }
             pmiq++;
