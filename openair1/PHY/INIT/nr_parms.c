@@ -453,6 +453,11 @@ void nr_init_frame_parms_ue_sa(NR_DL_FRAME_PARMS *frame_parms, const nrUE_cell_p
         mu,
         N_RB_DL);
 
+  AssertFatal(downlink_frequency > 0,
+              "SA UE DL carrier is 0 Hz. Pass -C <DL_center_Hz> (same as gNB), or set cells[].rf_freq in the UE "
+              "config (see ci-scripts/yaml_files/5g_rfsimulator_multiue/nrue.uicc.conf). For FR2, set numerology and "
+              "N_RB_DL to match the cell (e.g. mu=3, 66 PRBs).\n");
+
   frame_parms->numerology_index = mu;
   frame_parms->dl_CarrierFreq = downlink_frequency;
   frame_parms->ul_CarrierFreq = downlink_frequency + delta_duplex;

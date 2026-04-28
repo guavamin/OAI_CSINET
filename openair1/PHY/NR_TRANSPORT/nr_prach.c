@@ -357,11 +357,41 @@ static void rx_nr_prach_ru_internal(prach_item_t *p,
   k*=K;
   k+=kbar;
 
+  // Ensure PRACH combining indexes stay within the DFT output range.
+  // With some PRACH parameter sets (and especially for 3/4 sampling),
+  // `k` can exceed `dftlen`, which would lead to out-of-bounds reads
+  // from `tmp[k2]`.
+  if (dftlen > 0) {
+    k = ((k % dftlen) + dftlen) % dftlen;
+  }
+
   for (int aa = 0; aa < p->nb_rx; aa++) {
     // Fixme: slot or slot makes no sense ???
     int slot2 = p->prach_sequence_length ? p->slot : p->slot;
     int idx = aa + beam_id * p->nb_rx;
-    c16_t *prach = (c16_t *)&rxdata[idx][get_samples_slot_timestamp(fp, slot2) + sample_offset_slot - N_TA_offset];
+    const int64_t prach_base_idx =
+      (int64_t)get_samples_slot_timestamp(fp, slot2) + (int64_t)sample_offset_slot - (int64_t)N_TA_offset;
+    const int64_t prach_end_idx = prach_base_idx + (int64_t)Ncp + (int64_t)reps * (int64_t)dftlen;
+
+    // If the PRACH window goes outside the allocated RU time buffer,
+    // dft() will read out-of-bounds and may segfault.
+    if (prach_base_idx < 0 || prach_end_idx > (int64_t)fp->samples_per_frame) {
+      LOG_W(NR_PHY_RACH,
+            "Skip PRACH (out of buffer): frame %d slot %d format %d occ %d: base %ld end %ld (buf end %u) Ncp %d dftlen %d reps %d\n",
+            p->frame,
+            p->slot,
+            p->pdu.prach_format,
+            prachOccasion,
+            prach_base_idx,
+            prach_end_idx,
+            fp->samples_per_frame,
+            Ncp,
+            dftlen,
+            reps);
+      continue;
+    }
+
+    c16_t *prach = (c16_t *)&rxdata[idx][prach_base_idx];
 
     // do DFT
     c16_t *prach2 = prach + Ncp;
@@ -375,7 +405,7 @@ static void rx_nr_prach_ru_internal(prach_item_t *p,
       //    if (k+N_ZC > dftlen) { // PRACH signal is split around DC
       int k2 = k;
       for (int j = 0; j < N_ZC; j++, k2++) {
-        if (k2 == dftlen)
+        if (k2 >= dftlen)
           k2 = 0;
         rxsigF_tmp[j] = c16add(rxsigF_tmp[j], tmp[k2]);
       }

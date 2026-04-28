@@ -7716,7 +7716,7 @@ void dft_implementation(uint8_t sizeidx, int16_t *input, int16_t *output, unsign
 
 void idft_implementation(uint8_t sizeidx, int16_t *input, int16_t *output, unsigned char scale_flag)
 {
-  AssertFatal((sizeidx>=0 && sizeidx<DFT_SIZE_IDXTABLESIZE),"Invalid idft size index %i\n",sizeidx);
+  AssertFatal((sizeidx>=0 && sizeidx<IDFT_SIZE_IDXTABLESIZE),"Invalid idft size index %i\n",sizeidx);
         int algn=0xF;
 	algn=0x1F;
         AssertFatal( ((intptr_t)output&algn)==0,"Buffers should be 16 bytes aligned %p",output);

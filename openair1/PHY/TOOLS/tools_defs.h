@@ -601,6 +601,7 @@ void init_fft(uint16_t size,
   SZ_DEF(64)                   \
   SZ_DEF(128)                  \
   SZ_DEF(256)                  \
+  SZ_DEF(384)                  \
   SZ_DEF(512)                  \
   SZ_DEF(768)                  \
   SZ_DEF(1024)                 \

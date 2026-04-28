@@ -11,6 +11,7 @@ After you have [built the softmodem executables](BUILD.md), go to the build dire
 |-----------------------------	|-------------------------------------------------------------------------------------------  |---------------------------	|
 | **FR1 40MHz<br>30kHz SCS**  	| gnb0.prs.band78.fr1.106PRB.usrpx310.conf<br>gnb1.prs.band78.fr1.106PRB.usrpx310.conf 	| ue.nr.prs.fr1.106prb.conf 	|
 | **FR2 100MHz<br>120kHz SCS**  | gnb0.prs.band261.fr2.64PRB.usrpx310.conf<br>gnb1.prs.band261.fr2.64PRB.usrpx310.conf 	| ue.nr.prs.fr2.64prb.conf  	|
+| **FR2 50MHz<br>120kHz SCS** (32 PRB, TS 38.104) | gnb0.sa.band261.fr2.50mhz.usrpx310.conf | ue.nr.prs.fr2.50mhz.conf (merge with `ue.sa.band261.fr2.50mhz.conf` for SA) |
 
 Under gNB and nrUE config files, parameters are configured under `prs_config` section. nrUE is capable to receive downlink PRS signal from multiple gNB simultaneously and therefore nrUE config file contains multiple `prs_config` sections, corresponding to each gNB. These parameters can be changed as per the test scenario.
 

@@ -96,12 +96,17 @@ int RCconfig_NR_NG(MessageDef *msg_p, uint32_t i)
                         "    plmn_list = ( { mcc = 208; mnc = 93; mnc_length = 2; } )\n");
             // PLMN
             plmn_id_t p[PLMN_LIST_MAX_SIZE] = {0};
-            NGAP_REGISTER_GNB_REQ(msg_p).num_plmn = set_plmn_config(p, 0);
+            NGAP_REGISTER_GNB_REQ(msg_p).num_plmn = set_plmn_config(p, k);
             for (int l = 0; l < NGAP_REGISTER_GNB_REQ(msg_p).num_plmn; ++l) {
               NGAP_REGISTER_GNB_REQ(msg_p).plmn[l].plmn = p[l];
               // SNSSAI
               NGAP_REGISTER_GNB_REQ(msg_p).plmn[l].num_nssai =
                   set_snssai_config(NGAP_REGISTER_GNB_REQ(msg_p).plmn[l].s_nssai, 8, k, l);
+              AssertFatal(NGAP_REGISTER_GNB_REQ(msg_p).plmn[l].num_nssai >= 1,
+                          "NGAP NGSetupRequest needs at least one S-NSSAI per PLMN. Add e.g. "
+                          "snssaiList = ({ sst = 1; }) under each entry in plmn_list (gNB %u, PLMN index %d).\n",
+                          k,
+                          l);
             }
             NGAP_REGISTER_GNB_REQ(msg_p).default_drx = 0;
             // NG
