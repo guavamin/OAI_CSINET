@@ -224,6 +224,11 @@ void get_common_options(configmodule_interface_t *cfg)
   AssertFatal(get_softmodem_params()->ai_fb_runtime_log_period_frames >= 0,
               "--ai-fb-runtime-log-period-frames expects >=0 (is %d)\n",
               get_softmodem_params()->ai_fb_runtime_log_period_frames);
+  AssertFatal(get_softmodem_params()->ai_fb_pucch_replace == 0 || get_softmodem_params()->ai_fb_pucch_replace == 1,
+              "--ai-fb-pucch-replace expects 0 or 1 (is %d)\n",
+              get_softmodem_params()->ai_fb_pucch_replace);
+  if (get_softmodem_params()->ai_fb_pucch_replace)
+    LOG_I(UTIL, "Lab AI CSI PUCCH replacement enabled (--ai-fb-pucch-replace=1): legacy CSI on PUCCH replaced by 48-bit AI latent, carried over PUCCH Format 2 with default PRB count\n");
   AssertFatal(get_softmodem_params()->srs_imscope_log_enable == 0 || get_softmodem_params()->srs_imscope_log_enable == 1,
               "--srs-imscope-log-enable expects 0 or 1 (is %d)\n",
               get_softmodem_params()->srs_imscope_log_enable);

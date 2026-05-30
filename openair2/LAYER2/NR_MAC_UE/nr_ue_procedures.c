@@ -3077,6 +3077,28 @@ static nfapi_nr_ue_csi_payload_t get_csirs_RI_PMI_CQI_payload(NR_UE_MAC_INST_t *
             ai_payload_replace_skipped);
     }
   }
+  /* --ai-fb-pucch-replace=1: when packing CSI for PUCCH, replace the legacy RI/PMI/CQI bits with
+   * the 6-byte AI latent. nr_get_csi_bitlen() already returned 48 here so the PUCCH resource is sized for it.
+   * If no fresh AI latent is available (mac->ai_fb_valid==false), we still emit 48 bits — zeros —
+   * so UE and gNB stay byte-aligned; the gNB decoder will see low-energy and fall back. */
+  if (get_softmodem_params()->ai_fb_pucch_replace && mapping_type != ON_PUSCH) {
+    uint64_t latent_payload = 0;
+    if (mac->ai_fb_valid) {
+      for (int b = 0; b < NR_AI_CSI_FB_LATENT_BYTES; b++)
+        latent_payload |= ((uint64_t)mac->ai_fb_payload[b] << (8 * b));
+    }
+    p1_bits = NR_AI_CSI_FB_LATENT_BYTES * 8;
+    p2_bits = 0;
+    temp_payload_1 = latent_payload;
+    temp_payload_2 = 0;
+    if (get_softmodem_params()->print_csi_debug) {
+      LOG_I(NR_MAC,
+            "UE CSI PUCCH replace: ai_fb_valid=%d, p1_bits=%d, payload=0x%012lx\n",
+            (int)mac->ai_fb_valid,
+            p1_bits,
+            temp_payload_1);
+    }
+  }
   AssertFatal(p1_bits <= 64 && p2_bits <= 64, "Not supporting CSI report with more than 64 bits\n");
   nfapi_nr_ue_csi_payload_t csi = {.part1_payload = temp_payload_1, .part2_payload = temp_payload_2, .p1_bits = p1_bits, csi.p2_bits = p2_bits};
   return csi;

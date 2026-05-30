@@ -144,6 +144,10 @@ typedef struct {
   int8_t ai_cqi_delta_ai_minus_decode;
   /** 1 when sched mode on, tuple valid+fresh, and RI/CQI/PMI differ from decoded CSI (override would disagree with air decode). */
   uint8_t ai_runtime_override_disagrees_decode;
+  /** DL block error rate (running EWMA from sched_ctrl->dl_bler_stats.bler), 0.0–1.0. */
+  float dl_bler;
+  /** MCS most recently scheduled for DL on this UE. */
+  uint8_t dl_mcs;
 } csi_report_scope_payload_t;
 
 typedef struct scopeData_s {

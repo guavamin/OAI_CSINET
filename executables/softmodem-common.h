@@ -151,6 +151,7 @@ extern "C"
 #define AI_FB_RUNTIME_SCHED_REQUIRE_FULL softmodem_params.ai_fb_runtime_sched_require_full
 #define AI_FB_RUNTIME_LOG_ENABLE softmodem_params.ai_fb_runtime_log_enable
 #define AI_FB_RUNTIME_LOG_PERIOD_FRAMES softmodem_params.ai_fb_runtime_log_period_frames
+#define AI_FB_PUCCH_REPLACE softmodem_params.ai_fb_pucch_replace
 #define SRS_IMSCOPE_LOG_ENABLE softmodem_params.srs_imscope_log_enable
 #define CSI_I2_HYST_THRESHOLD softmodem_params.csi_i2_hyst_threshold
 #define CSI_I2_HYST_WINDOW softmodem_params.csi_i2_hyst_window
@@ -217,6 +218,7 @@ extern int usrp_tx_thread;
   {"ai-fb-runtime-sched-require-full", CONFIG_HLP_AI_FB_RUNTIME_SCHED_REQUIRE_FULL, PARAMFLAG_BOOL, .iptr=&AI_FB_RUNTIME_SCHED_REQUIRE_FULL, .defintval=1, TYPE_INT, 0}, \
   {"ai-fb-runtime-log-enable", CONFIG_HLP_AI_FB_RUNTIME_LOG_ENABLE, PARAMFLAG_BOOL, .iptr=&AI_FB_RUNTIME_LOG_ENABLE, .defintval=0, TYPE_INT, 0}, \
   {"ai-fb-runtime-log-period-frames", CONFIG_HLP_AI_FB_RUNTIME_LOG_PERIOD_FRAMES, 0, .iptr=&AI_FB_RUNTIME_LOG_PERIOD_FRAMES, .defintval=100, TYPE_INT, 0}, \
+  {"ai-fb-pucch-replace", CONFIG_HLP_AI_FB_PUCCH_REPLACE, PARAMFLAG_BOOL, .iptr=&AI_FB_PUCCH_REPLACE, .defintval=0, TYPE_INT, 0}, \
   {"srs-imscope-log-enable", CONFIG_HLP_SRS_IMSCOPE_LOG_ENABLE, PARAMFLAG_BOOL, .iptr=&SRS_IMSCOPE_LOG_ENABLE, .defintval=0, TYPE_INT, 0}, \
   {"csi-i2-hyst-threshold", CONFIG_HLP_CSI_I2_HYST_THRESHOLD, 0, .iptr=&CSI_I2_HYST_THRESHOLD, .defintval=0, TYPE_INT, 0}, \
   {"csi-i2-hyst-window", CONFIG_HLP_CSI_I2_HYST_WINDOW, 0, .iptr=&CSI_I2_HYST_WINDOW, .defintval=0, TYPE_INT, 0}, \
@@ -294,6 +296,7 @@ extern int usrp_tx_thread;
    { .s5 = { NULL } },                     \
    { .s5 = { NULL } },                     \
    { .s5 = { NULL } },                     \
+   { .s5 = { NULL } },                     \
 }
 // clang-format on
 
@@ -319,6 +322,7 @@ extern int usrp_tx_thread;
 #define CONFIG_HLP_AI_FB_RUNTIME_SCHED_REQUIRE_FULL "Require AI RI+PMI+CQI tuple to all be present before overriding scheduling (1=yes,0=no)\n"
 #define CONFIG_HLP_AI_FB_RUNTIME_LOG_ENABLE "Enable periodic AI runtime scheduling logs independent from --print-csi-debug: 0=off, 1=on\n"
 #define CONFIG_HLP_AI_FB_RUNTIME_LOG_PERIOD_FRAMES "Periodicity (in frames) for AI runtime scheduling debug logs; 0 disables periodic logs\n"
+#define CONFIG_HLP_AI_FB_PUCCH_REPLACE "Replace legacy CSI on PUCCH with the 48-bit AI latent (UE packs latent into part1_payload, gNB routes raw bits to AI decoder). PUCCH stays Format 2 because the gNB PHY only decodes F0/F2; the default F2 size (≥8 PRBs) fits the 48-bit payload.\n"
 #define CONFIG_HLP_SRS_IMSCOPE_LOG_ENABLE "Enable SRS/imscope-related logs in gNB PHY scheduling path: 0=disable, 1=enable\n"
 #define CONFIG_HLP_CSI_I2_HYST_THRESHOLD "UE CSI 2-port rank-2 i2 hysteresis threshold (consecutive opposite filtered decisions before effective i2 switch); 0 disables\n"
 #define CONFIG_HLP_CSI_I2_HYST_WINDOW "UE CSI 2-port rank-2 i2 majority window size over raw decisions before hysteresis; 0/1 disables\n"
@@ -449,6 +453,7 @@ typedef struct {
   int ai_fb_runtime_sched_require_full; /* Require full AI tuple before override */
   int ai_fb_runtime_log_enable; /* Enable periodic runtime selector logs */
   int ai_fb_runtime_log_period_frames; /* Periodicity of runtime selector logs */
+  int ai_fb_pucch_replace; /* Replace legacy CSI on PUCCH with 48-bit AI latent and switch PUCCH resource to Format 3 */
   int srs_imscope_log_enable; /* Print SRS/imscope visualization logs */
   int csi_i2_hyst_threshold; /* UE-side hysteresis for 2-port rank-2 i2 */
   int csi_i2_hyst_window; /* UE-side majority window for 2-port rank-2 i2 */

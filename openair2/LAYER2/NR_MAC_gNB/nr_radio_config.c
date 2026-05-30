@@ -1332,6 +1332,10 @@ static void config_pucch_resset1(const NR_ServingCellConfigCommon_t *scc,
     AssertFatal(pucch_F0_2WithoutFH == NULL,"UE does not support PUCCH F2 without frequency hopping. Current configuration is without FH\n");
   }
 
+  /* AI feedback over PUCCH stays on Format 2; the default pucch2_size (≥8 PRBs for ≤4 ports)
+   * gives capacity ≈ prbs·16 = 128 bits at maxCodeRate 0.25, comfortably fitting 48-bit AI latent
+   * plus CRC, and also satisfying Polar's NPRB > 2 constraint. F3 is not used because the gNB PHY
+   * (phy_procedures_nr_gNB.c:1044) only decodes F0 and F2. */
   int pucch2_size = get_pucch2_size(ap->N1 * ap->N2 * ap->XP);
   NR_PUCCH_Resource_t *pucchres2 = calloc(1,sizeof(*pucchres2));
   pucchres2->pucch_ResourceId = *pucchressetid;

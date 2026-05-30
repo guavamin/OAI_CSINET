@@ -4819,6 +4819,10 @@ uint16_t nr_get_csi_bitlen(nr_csi_report_t *csi_report)
                    CSI_report_bitlen->rsrp_bitlen +(CSI_report_bitlen->diff_rsrp_bitlen *
                                                     (CSI_report_bitlen->nb_ssbri_cri -1 )));
   } else {
+    /* AI CSI feedback over PUCCH: legacy CRI/RI/PMI/CQI fields replaced by a fixed 48-bit AI latent.
+     * Both UE (payload packing) and gNB (PUCCH resource sizing + decode) must see the same bitlen. */
+    if (get_softmodem_params()->ai_fb_pucch_replace)
+      return 48;
     csi_meas_bitlen = &(csi_report->csi_meas_bitlen); //This might need to be moodif for Aperiodic CSI-RS measurements
     uint16_t temp_bitlen;
     for (int i = 0; i < 8; i++) {

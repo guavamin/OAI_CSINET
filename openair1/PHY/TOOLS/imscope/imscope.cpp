@@ -23,6 +23,7 @@
 #include "imgui_internal.h" /* DockBuilderDockWindow, DockBuilderFinish (internal API) */
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
+#include <cfloat>
 #include <stdio.h>
 #define GL_SILENCE_DEPRECATION
 #if defined(IMGUI_IMPL_OPENGL_ES2)
@@ -968,6 +969,38 @@ void ShowGnbScope(void *data_void_ptr, float t, const char *window_filter)
                     (unsigned)last_csi.ai_runtime_fallback_missing,
                     (unsigned)last_csi.ai_runtime_fallback_stale,
                     (unsigned)last_csi.ai_runtime_fallback_incomplete);
+        ImGui::Separator();
+        ImGui::TextUnformatted("DL link quality (running BLER from gNB scheduler)");
+        {
+          /* Rolling history of DL BLER. We sample on every new CSI report (detected by a change in the
+           * report's own frame/slot), not on AI runtime tuple updates — those only move when
+           * --ai-fb-runtime-sched-mode != 0, which is off by default. */
+          static const int kBlerHistN = 256;
+          static float bler_hist[kBlerHistN] = {0};
+          static int bler_hist_idx = 0;
+          static int last_report_frame = -1;
+          static int last_report_slot = -1;
+          if (last_csi.frame != last_report_frame || last_csi.slot != last_report_slot) {
+            bler_hist[bler_hist_idx] = last_csi.dl_bler;
+            bler_hist_idx = (bler_hist_idx + 1) % kBlerHistN;
+            last_report_frame = last_csi.frame;
+            last_report_slot = last_csi.slot;
+          }
+          ImGui::Text("Current DL BLER: %.4f   |   DL MCS: %u   |   Samples so far: %d",
+                      last_csi.dl_bler,
+                      (unsigned)last_csi.dl_mcs,
+                      bler_hist_idx);
+          /* Auto-scaling y-axis: ImGui::PlotLines treats FLT_MAX as "use the data's actual min/max",
+           * which is the right choice when BLER is typically tiny (e.g., 0.0002) but can spike to 1.0. */
+          ImGui::PlotLines("BLER",
+                           bler_hist,
+                           kBlerHistN,
+                           bler_hist_idx,
+                           nullptr,
+                           FLT_MAX,
+                           FLT_MAX,
+                           ImVec2(0, 80));
+        }
       } else {
         ImGui::TextUnformatted("No CSI report received yet.");
       }

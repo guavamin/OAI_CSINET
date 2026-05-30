@@ -2300,7 +2300,8 @@ void nr_ue_csi_rs_procedures(PHY_VARS_NR_UE *ue,
 
   bool ai_fb_valid = false;
   uint8_t ai_fb_payload[NFAPI_NR_AI_CSI_FB_LATENT_BYTES] = {0};
-  if ((mapping_parms.ports == 4 || mapping_parms.ports == 2) && get_softmodem_params()->ai_fb_ulsch_enable) {
+  if ((mapping_parms.ports == 4 || mapping_parms.ports == 2)
+      && (get_softmodem_params()->ai_fb_ulsch_enable || get_softmodem_params()->ai_fb_pucch_replace)) {
     ai_fb_valid = nr_ai_fb_encode_dominant_v(frame_parms,
                                              csirs_config_pdu,
                                              mem_offset,

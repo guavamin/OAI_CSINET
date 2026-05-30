@@ -820,6 +820,67 @@ void nr_extract_csi_report_from_raw_payload(NR_CSI_MeasConfig_t *csi_MeasConfig,
             && reportQuantity_type != NR_CSI_ReportConfig__reportQuantity_PR_ssb_Index_RSRP
             && reportQuantity_type != NR_CSI_ReportConfig__reportQuantity_PR_cri_RSRP)
           continue;
+        /* --ai-fb-pucch-replace=1: when the UE replaces legacy CSI bits on PUCCH with a 48-bit AI latent,
+         * route the raw bytes to the AI decoder instead of the structured evaluate_* chain. */
+        bool ai_consumed = false;
+        const bool ai_replace_active =
+            get_softmodem_params()->ai_fb_pucch_replace && bitlen == 48
+            && (reportQuantity_type == NR_CSI_ReportConfig__reportQuantity_PR_cri_RI_PMI_CQI
+                || reportQuantity_type == NR_CSI_ReportConfig__reportQuantity_PR_cri_RI_CQI
+                || reportQuantity_type == NR_CSI_ReportConfig__reportQuantity_PR_cri_RI_LI_PMI_CQI);
+        if (ai_replace_active) {
+          uint8_t latent[NR_AI_CSI_FB_LATENT_BYTES];
+          for (int b = 0; b < NR_AI_CSI_FB_LATENT_BYTES; b++)
+            latent[b] = payload[b];
+          const ai_fb_impl_mode_t impl_mode = (ai_fb_impl_mode_t)get_softmodem_params()->ai_fb_impl_mode;
+          const nr_pdsch_AntennaPorts_t *ap = &nrmac->radio_config.pdsch_AntennaPorts;
+          const int n_ports = ap->N1 * ap->N2 * ap->XP;
+          uint8_t custom_ri = 0, custom_x1 = 0, custom_x2 = 0, custom_cqi = 0;
+          bool decoded = false;
+          if (n_ports == 2) {
+            ai_fb_decode2p_out_t dec2;
+            if (ai_fb_decode_rank1_2p(latent, impl_mode, &dec2)) {
+              custom_ri = dec2.ri;
+              custom_x1 = dec2.pmi_x1;
+              custom_x2 = dec2.pmi_x2;
+              custom_cqi = dec2.cqi;
+              decoded = true;
+            }
+          } else if (n_ports == 4) {
+            ai_fb_decode4p_out_t dec4;
+            if (ai_fb_decode_rank1_4p(latent, impl_mode, &dec4)) {
+              custom_ri = dec4.ri;
+              custom_x1 = dec4.pmi_x1;
+              custom_x2 = dec4.pmi_x2;
+              custom_cqi = dec4.cqi;
+              decoded = true;
+            }
+          }
+          if (decoded) {
+            sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.print_report = true;
+            sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.csi_report_id = csi_report_id;
+            sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.ri = custom_ri;
+            sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x1 = custom_x1;
+            sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x2 = custom_x2;
+            sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.wb_cqi_1tb = custom_cqi;
+            ai_consumed = true;
+            if (get_softmodem_params()->print_csi_debug) {
+              LOG_I(NR_MAC,
+                    "gNB PUCCH AI decode (n_ports=%d, mode=%d): latent=[%d,%d,%d,%d,%d,%d] -> RI=%u PMI=(0x%x,0x%x) CQI=%u\n",
+                    n_ports, (int)impl_mode,
+                    (int8_t)latent[0], (int8_t)latent[1], (int8_t)latent[2],
+                    (int8_t)latent[3], (int8_t)latent[4], (int8_t)latent[5],
+                    custom_ri, custom_x1, custom_x2, custom_cqi);
+            }
+          } else {
+            LOG_W(NR_MAC,
+                  "gNB PUCCH AI decode failed (n_ports=%d, mode=%d); keeping previous CSI_report values\n",
+                  n_ports, (int)impl_mode);
+            ai_consumed = true; /* still skip legacy decode — its bit layout won't match 48-bit payload */
+          }
+        }
+        if (ai_consumed)
+          continue;
         switch (reportQuantity_type) {
           case NR_CSI_ReportConfig__reportQuantity_PR_cri_RSRP:
             evaluate_rsrp_report(nrmac, UE, sched_ctrl, csi_report_id, payload, &cumul_bits, reportQuantity_type);
@@ -1365,6 +1426,8 @@ skip_ai_compare:
                                         || sched_ctrl->ai_fb_runtime_pmi_x2 != cr->pmi_x2);
                   payload.ai_runtime_override_disagrees_decode = (uint8_t)(mode_on && fresh_tuple && differs);
                 }
+                payload.dl_bler = sched_ctrl->dl_bler_stats.bler;
+                payload.dl_mcs = sched_ctrl->dl_bler_stats.mcs;
                 /* RSRP: cri-RSRP fills csirs_rsrp_report. For num_antenna_ports >= 4, config_rsrp_meas_report uses
                  * ssb_Index_RSRP instead (see nr_radio_config.c), so the decoded RSRP is in ssb_rsrp_report — imscope
                  * must read both or 4x4 always showed 0 dBm. */
