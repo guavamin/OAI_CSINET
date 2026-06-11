@@ -305,7 +305,7 @@ extern int usrp_tx_thread;
 #define CONFIG_HLP_PRINT_CSI_DEBUG "Print CSI debug traces (RI/PMI/RX-estimator + gNB decode/policy) on terminal\n"
 #define CONFIG_HLP_AI_FB_ULSCH_ENABLE "Enable lab custom AI CSI feedback over UL-SCH LCID (legacy PUCCH CSI remains active)\n"
 #define CONFIG_HLP_AI_FB_LOG_PATH "Path to append AI-vs-legacy PMI comparison CSV at gNB (optional)\n"
-#define CONFIG_HLP_AI_FB_IMPL_MODE "AI feedback implementation mode: 0=matrix(default), 1=MLP stub, 2=model stub, 3=csinet, 4=angular-delay-mlp, 5=angular-delay-refinenet\n"
+#define CONFIG_HLP_AI_FB_IMPL_MODE "AI feedback implementation mode: 0=matrix(default), 1=MLP stub, 2=model stub, 3=csinet, 4=angular-delay-mlp, 5=angular-delay-refinenet, 6=angular-delay-refinenet with legacy RI/CQI\n"
 #define CONFIG_HLP_AI_FB_FORCE_RANK1 "Force CSI RI restriction to rank-1 only for AI study mode (applied only when --ai-fb-ulsch-enable=1)\n"
 #define CONFIG_HLP_AI_FB_MODEL_PATH "Path to model-stub weights file (.bin preferred, .txt supported) used when --ai-fb-impl-mode=2\n"
 #define CONFIG_HLP_AI_FB_MODEL_BACKEND "Model-stub backend selector: 0=native loader, 1=ONNX stub, 2=TFLite stub\n"
@@ -322,7 +322,7 @@ extern int usrp_tx_thread;
 #define CONFIG_HLP_AI_FB_RUNTIME_SCHED_REQUIRE_FULL "Require AI RI+PMI+CQI tuple to all be present before overriding scheduling (1=yes,0=no)\n"
 #define CONFIG_HLP_AI_FB_RUNTIME_LOG_ENABLE "Enable periodic AI runtime scheduling logs independent from --print-csi-debug: 0=off, 1=on\n"
 #define CONFIG_HLP_AI_FB_RUNTIME_LOG_PERIOD_FRAMES "Periodicity (in frames) for AI runtime scheduling debug logs; 0 disables periodic logs\n"
-#define CONFIG_HLP_AI_FB_PUCCH_REPLACE "Replace legacy CSI on PUCCH with the 48-bit AI latent (UE packs latent into part1_payload, gNB routes raw bits to AI decoder). PUCCH stays Format 2 because the gNB PHY only decodes F0/F2; the default F2 size (≥8 PRBs) fits the 48-bit payload.\n"
+#define CONFIG_HLP_AI_FB_PUCCH_REPLACE "Replace legacy CSI on PUCCH with the AI payload (mode 5: 48-bit latent; mode 6: latent plus compact legacy RI/CQI). PUCCH stays Format 2 because the gNB PHY only decodes F0/F2; the default F2 size fits the current 2-port mode-6 payload.\n"
 #define CONFIG_HLP_SRS_IMSCOPE_LOG_ENABLE "Enable SRS/imscope-related logs in gNB PHY scheduling path: 0=disable, 1=enable\n"
 #define CONFIG_HLP_CSI_I2_HYST_THRESHOLD "UE CSI 2-port rank-2 i2 hysteresis threshold (consecutive opposite filtered decisions before effective i2 switch); 0 disables\n"
 #define CONFIG_HLP_CSI_I2_HYST_WINDOW "UE CSI 2-port rank-2 i2 majority window size over raw decisions before hysteresis; 0/1 disables\n"
@@ -453,7 +453,7 @@ typedef struct {
   int ai_fb_runtime_sched_require_full; /* Require full AI tuple before override */
   int ai_fb_runtime_log_enable; /* Enable periodic runtime selector logs */
   int ai_fb_runtime_log_period_frames; /* Periodicity of runtime selector logs */
-  int ai_fb_pucch_replace; /* Replace legacy CSI on PUCCH with 48-bit AI latent and switch PUCCH resource to Format 3 */
+  int ai_fb_pucch_replace; /* Replace legacy CSI on PUCCH with AI payload over PUCCH Format 2 */
   int srs_imscope_log_enable; /* Print SRS/imscope visualization logs */
   int csi_i2_hyst_threshold; /* UE-side hysteresis for 2-port rank-2 i2 */
   int csi_i2_hyst_window; /* UE-side majority window for 2-port rank-2 i2 */

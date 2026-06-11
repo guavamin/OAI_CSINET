@@ -425,6 +425,7 @@ typedef struct {
 /* Fixed latent payload budget for phase-1 custom AI CSI feedback (6 int8 values). */
 #define NR_AI_CSI_FB_LATENT_BYTES                  6
 #define NR_AI_CSI_FB_LATENT_BITS                   (NR_AI_CSI_FB_LATENT_BYTES * 8)
+#define NR_AI_CSI_FB_LEGACY_CQI_BITS               4
 
 #define NR_AI_BUNDLED_FEEDBACK_VERSION             1
 /* Variable-size bundled CE payload:
@@ -642,4 +643,3 @@ typedef enum {
 } nr_ra_type_t;
 
 #endif /*__LAYER2_MAC_H__ */
-

@@ -197,8 +197,7 @@ bool ai_fb_decode_rank1_4p(const uint8_t latent[6], ai_fb_impl_mode_t mode, ai_f
 {
   memset(out, 0, sizeof(*out));
   float z[6];
-  const float qstep = (mode == AI_FB_IMPL_ANGULAR_DELAY_MLP || mode == AI_FB_IMPL_ANGULAR_DELAY_REFINENET) ? AI_FB_ANGULAR_LATENT_QSTEP
-                                                                                                           : 0.01f;
+  const float qstep = ai_fb_impl_is_angular_delay(mode) ? AI_FB_ANGULAR_LATENT_QSTEP : 0.01f;
   for (int i = 0; i < 6; i++)
     z[i] = (float)((int8_t)latent[i]) * qstep;
 
@@ -213,8 +212,8 @@ bool ai_fb_decode_rank1_4p(const uint8_t latent[6], ai_fb_impl_mode_t mode, ai_f
       {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -0.7f},
   };
   float x[8] = {0};
-  if (mode == AI_FB_IMPL_ANGULAR_DELAY_MLP || mode == AI_FB_IMPL_ANGULAR_DELAY_REFINENET) {
-    if (mode == AI_FB_IMPL_ANGULAR_DELAY_REFINENET) {
+  if (ai_fb_impl_is_angular_delay(mode)) {
+    if (ai_fb_impl_is_refinenet(mode)) {
       float feat[AI_FB_AD_IN] = {0};
       ai_fb_decode_refinenet(z, feat);
       for (int p = 0; p < 4; p++) {
@@ -266,7 +265,7 @@ bool ai_fb_decode_rank1_4p(const uint8_t latent[6], ai_fb_impl_mode_t mode, ai_f
     n2 += creal(out->vhat[i] * conj(out->vhat[i]));
   const double n = sqrt(n2);
   if (n < 1e-12) {
-    if (mode == AI_FB_IMPL_ANGULAR_DELAY_MLP || mode == AI_FB_IMPL_ANGULAR_DELAY_REFINENET) {
+    if (ai_fb_impl_is_angular_delay(mode)) {
       out->low_energy_fallback = true;
       out->pmi_x1 = 0;
       out->pmi_x2 = 0;
@@ -326,7 +325,7 @@ bool ai_fb_decode_rank1_4p(const uint8_t latent[6], ai_fb_impl_mode_t mode, ai_f
   const int ll_canonical = best_class + 4;
   out->pmi_x1 = (uint8_t)(((ll_canonical & 0x7) << 3) | (best_mm & 0x7));
   out->pmi_x2 = 0;
-  if (mode == AI_FB_IMPL_ANGULAR_DELAY_MLP || mode == AI_FB_IMPL_ANGULAR_DELAY_REFINENET) {
+  if (ai_fb_impl_is_angular_delay(mode)) {
     const double m = (best < 0.0) ? 0.0 : best;
     out->cqi = (uint8_t)fmin(15.0, fmax(0.0, m * 16.0));
     out->ri = (m > ai_fb_angular_ri_metric_thresh) ? 1 : 0;
@@ -340,11 +339,10 @@ bool ai_fb_decode_rank1_4p(const uint8_t latent[6], ai_fb_impl_mode_t mode, ai_f
 bool ai_fb_decode_rank1_2p(const uint8_t latent[6], ai_fb_impl_mode_t mode, ai_fb_decode2p_out_t *out)
 {
   memset(out, 0, sizeof(*out));
-  const float qstep = (mode == AI_FB_IMPL_ANGULAR_DELAY_MLP || mode == AI_FB_IMPL_ANGULAR_DELAY_REFINENET) ? AI_FB_ANGULAR_LATENT_QSTEP
-                                                                                                           : 0.01f;
+  const float qstep = ai_fb_impl_is_angular_delay(mode) ? AI_FB_ANGULAR_LATENT_QSTEP : 0.01f;
   float x0, x1, x2, x3;
-  if (mode == AI_FB_IMPL_ANGULAR_DELAY_MLP || mode == AI_FB_IMPL_ANGULAR_DELAY_REFINENET) {
-    if (mode == AI_FB_IMPL_ANGULAR_DELAY_REFINENET) {
+  if (ai_fb_impl_is_angular_delay(mode)) {
+    if (ai_fb_impl_is_refinenet(mode)) {
       float z[6];
       for (int i = 0; i < 6; i++)
         z[i] = (float)((int8_t)latent[i]) * qstep;
@@ -413,7 +411,7 @@ bool ai_fb_decode_rank1_2p(const uint8_t latent[6], ai_fb_impl_mode_t mode, ai_f
   double n2 = creal(out->vhat2[0] * conj(out->vhat2[0])) + creal(out->vhat2[1] * conj(out->vhat2[1]));
   const double n = sqrt(n2);
   if (n < 1e-12) {
-    if (mode == AI_FB_IMPL_ANGULAR_DELAY_MLP || mode == AI_FB_IMPL_ANGULAR_DELAY_REFINENET) {
+    if (ai_fb_impl_is_angular_delay(mode)) {
       out->low_energy_fallback = true;
       out->pmi_x1 = 0;
       out->pmi_x2 = 0;
@@ -427,7 +425,7 @@ bool ai_fb_decode_rank1_2p(const uint8_t latent[6], ai_fb_impl_mode_t mode, ai_f
 
   double best = -1.0;
   uint8_t best_pmi_x2 = 0;
-  if (mode == AI_FB_IMPL_ANGULAR_DELAY_MLP || mode == AI_FB_IMPL_ANGULAR_DELAY_REFINENET) {
+  if (ai_fb_impl_is_angular_delay(mode)) {
     /* NR Type I single-panel i2 for 2 ports, 2 layers: TPMI rows 0–1 of TS 38.211 Table 6.3.1.5-4 (1-bit i2 in OAI configs). */
     for (uint8_t i2 = 0; i2 < 2; i2++) {
       double complex W[2][2];
@@ -454,7 +452,7 @@ bool ai_fb_decode_rank1_2p(const uint8_t latent[6], ai_fb_impl_mode_t mode, ai_f
   out->best_metric = best;
   out->pmi_x1 = 0;
   out->pmi_x2 = best_pmi_x2;
-  if (mode == AI_FB_IMPL_ANGULAR_DELAY_MLP || mode == AI_FB_IMPL_ANGULAR_DELAY_REFINENET) {
+  if (ai_fb_impl_is_angular_delay(mode)) {
     const double m = (best < 0.0) ? 0.0 : best;
     out->cqi = (uint8_t)fmin(15.0, fmax(0.0, m * 16.0));
     out->ri = (m > ai_fb_angular_ri_metric_thresh) ? 1 : 0;

@@ -45,6 +45,7 @@
 #include "NR_MAC_UE/mac_proto.h"
 #include "common/utils/nr/nr_common.h"
 #include "openair2/NR_UE_PHY_INTERFACE/NR_Packet_Drop.h"
+#include "openair2/LAYER2/NR_MAC_COMMON/ai_fb_common.h"
 
 /* PHY */
 #include "executables/softmodem-common.h"
@@ -2814,7 +2815,7 @@ static nfapi_nr_ue_csi_payload_t get_ssb_sinr_payload(NR_UE_MAC_INST_t *mac,
   }
   int max_bits = sizeof(((nfapi_nr_ue_csi_payload_t *)0)->part1_payload) * 8;
   AssertFatal(bits <= max_bits, "Not supporting CSI report with more than %d bits (payload: %d bits)\n", max_bits, bits);
-  nfapi_nr_ue_csi_payload_t csi = {.part1_payload = temp_payload, .part2_payload = 0, .p1_bits = bits, csi.p2_bits = 0};
+  nfapi_nr_ue_csi_payload_t csi = {.part1_payload = temp_payload, .part2_payload = 0, .p1_bits = bits, .p2_bits = 0};
   return csi;
 }
 
@@ -2929,6 +2930,10 @@ static nfapi_nr_ue_csi_payload_t get_csirs_RI_PMI_CQI_payload(NR_UE_MAC_INST_t *
   int p2_bits = 0;
   uint64_t temp_payload_1 = 0;
   uint64_t temp_payload_2 = 0;
+  uint8_t ai_legacy_ri_field = 0;
+  uint8_t ai_legacy_ri_bitlen = 0;
+  uint8_t ai_legacy_cqi = 0;
+  bool ai_legacy_ri_cqi_valid = false;
   AssertFatal(mapping_type != SUBBAND_ON_PUCCH, "CSI mapping for subband PMI and CQI not implemented\n");
 
   for (int csi_resourceidx = 0; csi_resourceidx < csi_MeasConfig->csi_ResourceConfigToAddModList->list.count; csi_resourceidx++) {
@@ -2974,6 +2979,10 @@ static nfapi_nr_ue_csi_payload_t get_csirs_RI_PMI_CQI_payload(NR_UE_MAC_INST_t *
           int pmi_x1_bitlen = csi_report->csi_meas_bitlen.pmi_x1_bitlen[ri_rank_for_payload];
           int pmi_x2_bitlen = csi_report->csi_meas_bitlen.pmi_x2_bitlen[ri_rank_for_payload];
           int cqi_bitlen = csi_report->csi_meas_bitlen.cqi_bitlen[ri_rank_for_payload];
+          ai_legacy_ri_field = ri_field_sent;
+          ai_legacy_ri_bitlen = ri_bitlen;
+          ai_legacy_cqi = mac->csirs_measurements.cqi & ((1u << NR_AI_CSI_FB_LEGACY_CQI_BITS) - 1u);
+          ai_legacy_ri_cqi_valid = true;
           int padding_bitlen = 0;
           // TODO: Improvements will be needed to cri_bitlen>0 and pmi_x1_bitlen>0
           uint64_t temp_payload_1_unreversed = 0;
@@ -2991,13 +3000,15 @@ static nfapi_nr_ue_csi_payload_t get_csirs_RI_PMI_CQI_payload(NR_UE_MAC_INST_t *
           }
           else {
             p1_bits = nr_get_csi_bitlen(csi_report);
-            padding_bitlen = p1_bits - (cri_bitlen + ri_bitlen + pmi_x1_bitlen + pmi_x2_bitlen + cqi_bitlen);
-            temp_payload_1_unreversed = (0/*mac->csi_measurements.cri*/ << (cqi_bitlen + pmi_x2_bitlen + pmi_x1_bitlen + padding_bitlen + ri_bitlen)) |
-                                        (ri_field_sent << (cqi_bitlen + pmi_x2_bitlen + pmi_x1_bitlen + padding_bitlen)) |
-                                        (mac->csirs_measurements.i1 << (cqi_bitlen + pmi_x2_bitlen)) |
-                                        (mac->csirs_measurements.i2 << (cqi_bitlen)) |
-                                        (mac->csirs_measurements.cqi);
-            temp_payload_1 = temp_payload_1_unreversed;
+            if (!get_softmodem_params()->ai_fb_pucch_replace) {
+              padding_bitlen = p1_bits - (cri_bitlen + ri_bitlen + pmi_x1_bitlen + pmi_x2_bitlen + cqi_bitlen);
+              temp_payload_1_unreversed = (0/*mac->csi_measurements.cri*/ << (cqi_bitlen + pmi_x2_bitlen + pmi_x1_bitlen + padding_bitlen + ri_bitlen)) |
+                                          (ri_field_sent << (cqi_bitlen + pmi_x2_bitlen + pmi_x1_bitlen + padding_bitlen)) |
+                                          (mac->csirs_measurements.i1 << (cqi_bitlen + pmi_x2_bitlen)) |
+                                          (mac->csirs_measurements.i2 << (cqi_bitlen)) |
+                                          (mac->csirs_measurements.cqi);
+              temp_payload_1 = temp_payload_1_unreversed;
+            }
           }
 
           temp_payload_1 = reverse_bits(temp_payload_1, p1_bits);
@@ -3050,7 +3061,11 @@ static nfapi_nr_ue_csi_payload_t get_csirs_RI_PMI_CQI_payload(NR_UE_MAC_INST_t *
       }
     }
   }
-  if (get_softmodem_params()->ai_fb_runtime_sched_mode == 2 && get_softmodem_params()->ai_fb_ulsch_enable && mac->ai_fb_valid) {
+  const ai_fb_impl_mode_t impl_mode = (ai_fb_impl_mode_t)get_softmodem_params()->ai_fb_impl_mode;
+  if (get_softmodem_params()->ai_fb_runtime_sched_mode == 2
+      && get_softmodem_params()->ai_fb_ulsch_enable
+      && !ai_fb_impl_uses_legacy_ri_cqi(impl_mode)
+      && mac->ai_fb_valid) {
     const int legacy_p1_bits = p1_bits;
     const int ai_latent_bits = NR_AI_CSI_FB_LATENT_BYTES * 8;
     uint64_t latent_payload = 0;
@@ -3078,8 +3093,8 @@ static nfapi_nr_ue_csi_payload_t get_csirs_RI_PMI_CQI_payload(NR_UE_MAC_INST_t *
     }
   }
   /* --ai-fb-pucch-replace=1: when packing CSI for PUCCH, replace the legacy RI/PMI/CQI bits with
-   * the 6-byte AI latent. nr_get_csi_bitlen() already returned 48 here so the PUCCH resource is sized for it.
-   * If no fresh AI latent is available (mac->ai_fb_valid==false), we still emit 48 bits — zeros —
+   * the AI payload. Mode 6 appends legacy RI-index and first-TB wideband CQI after the 6-byte latent.
+   * If no fresh AI latent is available (mac->ai_fb_valid==false), we still emit the expected bit count - zeros -
    * so UE and gNB stay byte-aligned; the gNB decoder will see low-energy and fall back. */
   if (get_softmodem_params()->ai_fb_pucch_replace && mapping_type != ON_PUSCH) {
     uint64_t latent_payload = 0;
@@ -3087,20 +3102,39 @@ static nfapi_nr_ue_csi_payload_t get_csirs_RI_PMI_CQI_payload(NR_UE_MAC_INST_t *
       for (int b = 0; b < NR_AI_CSI_FB_LATENT_BYTES; b++)
         latent_payload |= ((uint64_t)mac->ai_fb_payload[b] << (8 * b));
     }
-    p1_bits = NR_AI_CSI_FB_LATENT_BYTES * 8;
-    p2_bits = 0;
+    const bool hybrid_ri_cqi = ai_fb_impl_uses_legacy_ri_cqi(impl_mode);
+    uint16_t ai_payload_bits = NR_AI_CSI_FB_LATENT_BITS;
     temp_payload_1 = latent_payload;
+    if (hybrid_ri_cqi) {
+      AssertFatal(ai_legacy_ri_cqi_valid, "Mode 6 PUCCH AI payload requires a legacy RI/CQI CSI report\n");
+      AssertFatal(NR_AI_CSI_FB_LATENT_BITS + ai_legacy_ri_bitlen + NR_AI_CSI_FB_LEGACY_CQI_BITS <= 64,
+                  "Mode 6 PUCCH AI payload too large: latent=%d RI=%u CQI=%d\n",
+                  NR_AI_CSI_FB_LATENT_BITS,
+                  ai_legacy_ri_bitlen,
+                  NR_AI_CSI_FB_LEGACY_CQI_BITS);
+      const uint64_t ri_mask = ai_legacy_ri_bitlen == 0 ? 0 : ((1ULL << ai_legacy_ri_bitlen) - 1ULL);
+      temp_payload_1 |= ((uint64_t)ai_legacy_ri_field & ri_mask) << NR_AI_CSI_FB_LATENT_BITS;
+      temp_payload_1 |= ((uint64_t)ai_legacy_cqi & ((1ULL << NR_AI_CSI_FB_LEGACY_CQI_BITS) - 1ULL))
+                        << (NR_AI_CSI_FB_LATENT_BITS + ai_legacy_ri_bitlen);
+      ai_payload_bits += ai_legacy_ri_bitlen + NR_AI_CSI_FB_LEGACY_CQI_BITS;
+    }
+    p1_bits = ai_payload_bits;
+    p2_bits = 0;
     temp_payload_2 = 0;
     if (get_softmodem_params()->print_csi_debug) {
       LOG_I(NR_MAC,
-            "UE CSI PUCCH replace: ai_fb_valid=%d, p1_bits=%d, payload=0x%012lx\n",
+            "UE CSI PUCCH replace: ai_fb_valid=%d, mode=%d, p1_bits=%d, payload=0x%016lx, legacy_RI_field=%u/%u bits legacy_CQI=%u\n",
             (int)mac->ai_fb_valid,
+            (int)impl_mode,
             p1_bits,
-            temp_payload_1);
+            temp_payload_1,
+            (unsigned)ai_legacy_ri_field,
+            (unsigned)ai_legacy_ri_bitlen,
+            (unsigned)ai_legacy_cqi);
     }
   }
   AssertFatal(p1_bits <= 64 && p2_bits <= 64, "Not supporting CSI report with more than 64 bits\n");
-  nfapi_nr_ue_csi_payload_t csi = {.part1_payload = temp_payload_1, .part2_payload = temp_payload_2, .p1_bits = p1_bits, csi.p2_bits = p2_bits};
+  nfapi_nr_ue_csi_payload_t csi = {.part1_payload = temp_payload_1, .part2_payload = temp_payload_2, .p1_bits = p1_bits, .p2_bits = p2_bits};
   return csi;
 }
 
@@ -3153,7 +3187,7 @@ static nfapi_nr_ue_csi_payload_t get_csirs_RSRP_payload(NR_UE_MAC_INST_t *mac,
     }
   }
   AssertFatal(n_bits <= 32, "Not supporting CSI report with more than 32 bits\n");
-  nfapi_nr_ue_csi_payload_t csi = {.part1_payload = temp_payload, .p1_bits = n_bits, csi.p2_bits = 0};
+  nfapi_nr_ue_csi_payload_t csi = {.part1_payload = temp_payload, .p1_bits = n_bits, .p2_bits = 0};
   return csi;
 }
 

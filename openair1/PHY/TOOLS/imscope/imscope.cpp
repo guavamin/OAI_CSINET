@@ -972,34 +972,87 @@ void ShowGnbScope(void *data_void_ptr, float t, const char *window_filter)
         ImGui::Separator();
         ImGui::TextUnformatted("DL link quality (running BLER from gNB scheduler)");
         {
-          /* Rolling history of DL BLER. We sample on every new CSI report (detected by a change in the
-           * report's own frame/slot), not on AI runtime tuple updates — those only move when
-           * --ai-fb-runtime-sched-mode != 0, which is off by default. */
-          static const int kBlerHistN = 256;
-          static float bler_hist[kBlerHistN] = {0};
-          static int bler_hist_idx = 0;
+          /* Rolling history of DL BLER and DL throughput. We sample on every new CSI report (detected by a
+           * change in the report's own frame/slot), not on AI runtime tuple updates — those only move when
+           * --ai-fb-runtime-sched-mode != 0, which is off by default. Both curves share one write index so
+           * they stay aligned in time. */
+          static const int kHistN = 256;
+          static const float kTputMaxMbps = 50.0f; /* fixed throughput y-axis top (Mbps); raise if DL iperf exceeds it */
+          static float bler_hist[kHistN] = {0};
+          static float tput_hist[kHistN] = {0}; /* DL MAC throughput in Mbps (raw, instantaneous) */
+          static int hist_idx = 0;
           static int last_report_frame = -1;
           static int last_report_slot = -1;
+          static uint64_t prev_dl_bytes = 0;
+          static float prev_t = -1.0f;
+          static float tput_ewma = 0.0f;
+          static float last_tput_raw = 0.0f;
           if (last_csi.frame != last_report_frame || last_csi.slot != last_report_slot) {
-            bler_hist[bler_hist_idx] = last_csi.dl_bler;
-            bler_hist_idx = (bler_hist_idx + 1) % kBlerHistN;
+            /* DL throughput = delta of the cumulative MAC TX byte counter over wall-clock time. t is the
+             * scope's animation clock in seconds (t += ImGui DeltaTime each render frame). The byte counter
+             * resets to a smaller value on UE re-attach, so guard against a negative delta. */
+            if (prev_t >= 0.0f && t > prev_t && last_csi.dl_total_bytes >= prev_dl_bytes) {
+              double mbps = (double)(last_csi.dl_total_bytes - prev_dl_bytes) * 8.0 / (double)(t - prev_t) / 1e6;
+              last_tput_raw = (float)mbps;
+              /* Light EWMA tames the per-sample jitter from detecting reports at GUI-frame granularity. */
+              tput_ewma = 0.6f * tput_ewma + 0.4f * (float)mbps;
+            }
+            bler_hist[hist_idx] = last_csi.dl_bler;
+            tput_hist[hist_idx] = last_tput_raw; /* plot the RAW instantaneous rate (not the EWMA) */
+            hist_idx = (hist_idx + 1) % kHistN;
+            prev_dl_bytes = last_csi.dl_total_bytes;
+            prev_t = t;
             last_report_frame = last_csi.frame;
             last_report_slot = last_csi.slot;
           }
           ImGui::Text("Current DL BLER: %.4f   |   DL MCS: %u   |   Samples so far: %d",
                       last_csi.dl_bler,
                       (unsigned)last_csi.dl_mcs,
-                      bler_hist_idx);
-          /* Auto-scaling y-axis: ImGui::PlotLines treats FLT_MAX as "use the data's actual min/max",
-           * which is the right choice when BLER is typically tiny (e.g., 0.0002) but can spike to 1.0. */
+                      hist_idx);
+          /* Fixed 0..1 y-axis (previously auto-scaled with FLT_MAX): BLER's absolute magnitude is the point,
+           * so a fixed scale keeps it honest and comparable across runs / between CSI schemes. */
           ImGui::PlotLines("BLER",
                            bler_hist,
-                           kBlerHistN,
-                           bler_hist_idx,
+                           kHistN,
+                           hist_idx,
                            nullptr,
-                           FLT_MAX,
-                           FLT_MAX,
+                           0.0f,
+                           1.0f,
                            ImVec2(0, 80));
+          ImGui::TextDisabled("y: DL BLER (fixed 0.0-1.0)     x: CSI report index (last 256, oldest -> newest)");
+          ImGui::Text("Current DL throughput: %.2f Mbps (smoothed)   |   %.2f Mbps (raw)   |   total DL TX: %.2f MB",
+                      tput_ewma,
+                      last_tput_raw,
+                      (double)last_csi.dl_total_bytes / 1e6);
+          /* Hover "(?)" to explain raw vs smoothed in-place, without cluttering the panel. */
+          ImGui::SameLine();
+          ImGui::TextDisabled("(?)");
+          if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::TextUnformatted(
+                "DL throughput is sampled once per CSI report:\n"
+                "  (bytes sent since last report) x 8 / (seconds since last report).\n"
+                "\n"
+                "raw      = the instantaneous value; jumpy, because the time between\n"
+                "           reports is uneven (like a speedometer read every instant).\n"
+                "smoothed = a running average (EWMA 0.6*old + 0.4*new), shown as a\n"
+                "           number for reference -- the RAW value is what is plotted.\n"
+                "\n"
+                "Both are in Mbps (MAC TX bytes, so retransmissions are included).\n"
+                "raw and smoothed far apart => bursty link; close => steady.");
+            ImGui::EndTooltip();
+          }
+          /* Throughput y-axis: FIXED 0..kTputMaxMbps so the scale is stable and comparable across runs
+           * (was auto-scaled with FLT_MAX, which magnified idle noise); values above the top are clipped. */
+          ImGui::PlotLines("DL Mbps (raw)",
+                           tput_hist,
+                           kHistN,
+                           hist_idx,
+                           nullptr,
+                           0.0f,
+                           kTputMaxMbps,
+                           ImVec2(0, 80));
+          ImGui::TextDisabled("y: DL throughput (fixed 0-%g Mbps)     x: CSI report index (last 256, oldest -> newest)", (double)kTputMaxMbps);
         }
       } else {
         ImGui::TextUnformatted("No CSI report received yet.");

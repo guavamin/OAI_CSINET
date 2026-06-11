@@ -463,6 +463,28 @@ static uint8_t pickandreverse_bits(uint8_t *payload, uint16_t bitlen, uint8_t st
   return rev_bits;
 }
 
+static uint8_t pick_bits_lsb(const uint8_t *payload, uint16_t bitlen, uint8_t start_bit)
+{
+  uint8_t bits = 0;
+  for (int i = 0; i < bitlen; i++)
+    bits |= ((payload[(start_bit + i) / 8] >> ((start_bit + i) % 8)) & 0x01) << i;
+  return bits;
+}
+
+static uint8_t ri_rank_from_restriction_index(uint8_t ri_index, uint8_t ri_restriction)
+{
+  int count = 0;
+  for (int i = 0; i < 8; i++) {
+    if ((ri_restriction >> i) & 0x01) {
+      if (count == ri_index)
+        return i;
+      count++;
+    }
+  }
+  AssertFatal(false, "Decoded RI index %u does not correspond to ri_restriction 0x%02x\n", ri_index, ri_restriction);
+  return 0;
+}
+
 static void evaluate_sinr_report(gNB_MAC_INST *nrmac,
                                  NR_UE_info_t *UE,
                                  NR_UE_sched_ctrl_t *sched_ctrl,
@@ -820,11 +842,12 @@ void nr_extract_csi_report_from_raw_payload(NR_CSI_MeasConfig_t *csi_MeasConfig,
             && reportQuantity_type != NR_CSI_ReportConfig__reportQuantity_PR_ssb_Index_RSRP
             && reportQuantity_type != NR_CSI_ReportConfig__reportQuantity_PR_cri_RSRP)
           continue;
-        /* --ai-fb-pucch-replace=1: when the UE replaces legacy CSI bits on PUCCH with a 48-bit AI latent,
+        /* --ai-fb-pucch-replace=1: when the UE replaces legacy CSI bits on PUCCH with an AI payload,
          * route the raw bytes to the AI decoder instead of the structured evaluate_* chain. */
         bool ai_consumed = false;
+        const uint16_t ai_expected_bitlen = nr_get_csi_bitlen(csi_report);
         const bool ai_replace_active =
-            get_softmodem_params()->ai_fb_pucch_replace && bitlen == 48
+            get_softmodem_params()->ai_fb_pucch_replace && bitlen == ai_expected_bitlen
             && (reportQuantity_type == NR_CSI_ReportConfig__reportQuantity_PR_cri_RI_PMI_CQI
                 || reportQuantity_type == NR_CSI_ReportConfig__reportQuantity_PR_cri_RI_CQI
                 || reportQuantity_type == NR_CSI_ReportConfig__reportQuantity_PR_cri_RI_LI_PMI_CQI);
@@ -836,6 +859,18 @@ void nr_extract_csi_report_from_raw_payload(NR_CSI_MeasConfig_t *csi_MeasConfig,
           const nr_pdsch_AntennaPorts_t *ap = &nrmac->radio_config.pdsch_AntennaPorts;
           const int n_ports = ap->N1 * ap->N2 * ap->XP;
           uint8_t custom_ri = 0, custom_x1 = 0, custom_x2 = 0, custom_cqi = 0;
+          uint8_t legacy_ri = 0, legacy_cqi = 0;
+          bool legacy_ri_cqi_ok = false;
+          if (ai_fb_impl_uses_legacy_ri_cqi(impl_mode)) {
+            const uint8_t mode6_ri_bitlen = csi_report->csi_meas_bitlen.ri_bitlen;
+            const uint8_t mode6_ri_field =
+                mode6_ri_bitlen > 0 ? pick_bits_lsb(payload, mode6_ri_bitlen, NR_AI_CSI_FB_LATENT_BITS) : 0;
+            legacy_ri = ri_rank_from_restriction_index(mode6_ri_field, csi_report->csi_meas_bitlen.ri_restriction);
+            legacy_cqi = pick_bits_lsb(payload,
+                                       NR_AI_CSI_FB_LEGACY_CQI_BITS,
+                                       NR_AI_CSI_FB_LATENT_BITS + mode6_ri_bitlen);
+            legacy_ri_cqi_ok = true;
+          }
           bool decoded = false;
           if (n_ports == 2) {
             ai_fb_decode2p_out_t dec2;
@@ -857,26 +892,34 @@ void nr_extract_csi_report_from_raw_payload(NR_CSI_MeasConfig_t *csi_MeasConfig,
             }
           }
           if (decoded) {
+            if (legacy_ri_cqi_ok) {
+              custom_ri = legacy_ri;
+              custom_cqi = legacy_cqi;
+            }
             sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.print_report = true;
             sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.csi_report_id = csi_report_id;
+            sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.cqi_table = cqi_table;
             sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.ri = custom_ri;
             sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x1 = custom_x1;
             sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x2 = custom_x2;
             sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.wb_cqi_1tb = custom_cqi;
+            if (legacy_ri_cqi_ok)
+              sched_ctrl->dl_max_mcs = get_mcs_from_cqi(UE->current_DL_BWP.mcsTableIdx, cqi_table, custom_cqi);
             ai_consumed = true;
             if (get_softmodem_params()->print_csi_debug) {
               LOG_I(NR_MAC,
-                    "gNB PUCCH AI decode (n_ports=%d, mode=%d): latent=[%d,%d,%d,%d,%d,%d] -> RI=%u PMI=(0x%x,0x%x) CQI=%u\n",
+                    "gNB PUCCH AI decode (n_ports=%d, mode=%d): latent=[%d,%d,%d,%d,%d,%d] -> RI=%u PMI=(0x%x,0x%x) CQI=%u%s\n",
                     n_ports, (int)impl_mode,
                     (int8_t)latent[0], (int8_t)latent[1], (int8_t)latent[2],
                     (int8_t)latent[3], (int8_t)latent[4], (int8_t)latent[5],
-                    custom_ri, custom_x1, custom_x2, custom_cqi);
+                    custom_ri, custom_x1, custom_x2, custom_cqi,
+                    legacy_ri_cqi_ok ? " (RI/CQI from legacy UE fields)" : "");
             }
           } else {
             LOG_W(NR_MAC,
                   "gNB PUCCH AI decode failed (n_ports=%d, mode=%d); keeping previous CSI_report values\n",
                   n_ports, (int)impl_mode);
-            ai_consumed = true; /* still skip legacy decode — its bit layout won't match 48-bit payload */
+            ai_consumed = true; /* still skip legacy decode: its bit layout will not match the AI payload */
           }
         }
         if (ai_consumed)
@@ -1128,14 +1171,17 @@ void handle_nr_uci_pucch_2_3_4(module_id_t mod_id, frame_t frame, slot_t slot, c
       NR_CSI_MeasConfig_t *csi_MeasConfig = UE->sc_info.csi_MeasConfig;
       if (csi_MeasConfig != NULL) {
         bool csi_from_ai_payload = false;
-        if (get_softmodem_params()->ai_fb_runtime_sched_mode == 2 && get_softmodem_params()->ai_fb_ulsch_enable) {
+        const ai_fb_impl_mode_t impl_mode = (ai_fb_impl_mode_t)get_softmodem_params()->ai_fb_impl_mode;
+        if (get_softmodem_params()->ai_fb_runtime_sched_mode == 2
+            && get_softmodem_params()->ai_fb_ulsch_enable
+            && !get_softmodem_params()->ai_fb_pucch_replace
+            && !ai_fb_impl_uses_legacy_ri_cqi(impl_mode)) {
           uint8_t latent[NR_AI_CSI_FB_LATENT_BYTES] = {0};
           const int csi_bytes = (uci_234->csi_part1.csi_part1_bit_len + 7) / 8;
           if (csi_bytes >= NR_AI_CSI_FB_LATENT_BYTES) {
             memcpy(latent, uci_234->csi_part1.csi_part1_payload, NR_AI_CSI_FB_LATENT_BYTES);
             const nr_pdsch_AntennaPorts_t *ap = &nrmac->radio_config.pdsch_AntennaPorts;
             const int n_ports = ap->N1 * ap->N2 * ap->XP;
-            const ai_fb_impl_mode_t impl_mode = (ai_fb_impl_mode_t)get_softmodem_params()->ai_fb_impl_mode;
             uint8_t ai_ri = 0, ai_x1 = 0, ai_x2 = 0, ai_cqi = 0;
             bool ai_ok = false;
             if (n_ports == 2) {
@@ -1428,6 +1474,7 @@ skip_ai_compare:
                 }
                 payload.dl_bler = sched_ctrl->dl_bler_stats.bler;
                 payload.dl_mcs = sched_ctrl->dl_bler_stats.mcs;
+                payload.dl_total_bytes = UE->mac_stats.dl.total_bytes;
                 /* RSRP: cri-RSRP fills csirs_rsrp_report. For num_antenna_ports >= 4, config_rsrp_meas_report uses
                  * ssb_Index_RSRP instead (see nr_radio_config.c), so the decoded RSRP is in ssb_rsrp_report — imscope
                  * must read both or 4x4 always showed 0 dBm. */
@@ -1806,4 +1853,3 @@ void nr_sr_reporting(gNB_MAC_INST *nrmac, frame_t SFN, slot_t slot)
     }
   }
 }
-

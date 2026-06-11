@@ -40,6 +40,7 @@
 #include "common/utils/LOG/log.h"
 #include "softmodem-common.h"
 #include "nfapi/oai_integration/vendor_ext.h"
+#include "openair2/LAYER2/NR_MAC_COMMON/ai_fb_common.h"
 
 char *parallel_config=NULL;
 char *worker_config=NULL;
@@ -179,13 +180,13 @@ void get_common_options(configmodule_interface_t *cfg)
               get_softmodem_params()->ai_fb_ulsch_enable);
   if (get_softmodem_params()->ai_fb_ulsch_enable)
     LOG_I(UTIL, "Lab AI CSI UL-SCH path enabled (--ai-fb-ulsch-enable=1)\n");
-  AssertFatal(get_softmodem_params()->ai_fb_impl_mode >= 0 && get_softmodem_params()->ai_fb_impl_mode <= 5,
-              "--ai-fb-impl-mode expects 0,1,2,3,4,5 (is %d)\n",
+  AssertFatal(get_softmodem_params()->ai_fb_impl_mode >= 0 && get_softmodem_params()->ai_fb_impl_mode <= 6,
+              "--ai-fb-impl-mode expects 0,1,2,3,4,5,6 (is %d)\n",
               get_softmodem_params()->ai_fb_impl_mode);
   AssertFatal(get_softmodem_params()->ai_fb_force_rank1 == 0 || get_softmodem_params()->ai_fb_force_rank1 == 1,
               "--ai-fb-force-rank1 expects 0 or 1 (is %d)\n",
               get_softmodem_params()->ai_fb_force_rank1);
-  if ((get_softmodem_params()->ai_fb_impl_mode == 4 || get_softmodem_params()->ai_fb_impl_mode == 5)
+  if (ai_fb_impl_is_angular_delay((ai_fb_impl_mode_t)get_softmodem_params()->ai_fb_impl_mode)
       && get_softmodem_params()->ai_fb_force_rank1 != 0) {
     LOG_W(UTIL,
       "Lab AI FB angular-delay mode requires rank-2 capable legacy CSI decode; overriding --ai-fb-force-rank1 to 0\n");
@@ -228,7 +229,7 @@ void get_common_options(configmodule_interface_t *cfg)
               "--ai-fb-pucch-replace expects 0 or 1 (is %d)\n",
               get_softmodem_params()->ai_fb_pucch_replace);
   if (get_softmodem_params()->ai_fb_pucch_replace)
-    LOG_I(UTIL, "Lab AI CSI PUCCH replacement enabled (--ai-fb-pucch-replace=1): legacy CSI on PUCCH replaced by 48-bit AI latent, carried over PUCCH Format 2 with default PRB count\n");
+    LOG_I(UTIL, "Lab AI CSI PUCCH replacement enabled (--ai-fb-pucch-replace=1): legacy CSI on PUCCH replaced by AI payload, carried over PUCCH Format 2 with default PRB count\n");
   AssertFatal(get_softmodem_params()->srs_imscope_log_enable == 0 || get_softmodem_params()->srs_imscope_log_enable == 1,
               "--srs-imscope-log-enable expects 0 or 1 (is %d)\n",
               get_softmodem_params()->srs_imscope_log_enable);
@@ -250,6 +251,8 @@ void get_common_options(configmodule_interface_t *cfg)
       impl = "angular-delay-mlp";
     else if (get_softmodem_params()->ai_fb_impl_mode == 5)
       impl = "angular-delay-refinenet";
+    else if (get_softmodem_params()->ai_fb_impl_mode == 6)
+      impl = "angular-delay-refinenet-legacy-ri-cqi";
     LOG_I(UTIL, "Lab AI FB impl mode: %s (--ai-fb-impl-mode=%d)\n", impl, get_softmodem_params()->ai_fb_impl_mode);
     LOG_I(UTIL,
           "Lab AI FB rank policy: %s (--ai-fb-force-rank1=%d)\n",
@@ -318,11 +321,12 @@ void get_common_options(configmodule_interface_t *cfg)
             "Lab AI FB angular-delay model path: %s (2D-DFT + 24-delay-row preprocessing enabled in UE runtime)\n",
             (mp && mp[0] != '\0') ? mp : "(unset, fallback to compiled angular-delay defaults)");
     }
-    if (get_softmodem_params()->ai_fb_impl_mode == 5) {
+    if (get_softmodem_params()->ai_fb_impl_mode == 5 || get_softmodem_params()->ai_fb_impl_mode == 6) {
       const char *mp = get_softmodem_params()->ai_fb_model_path;
       LOG_I(UTIL,
-            "Lab AI FB angular-delay RefineNet model path: %s (conv+refinenet autoencoder over [24x4] angular-delay features)\n",
-            (mp && mp[0] != '\0') ? mp : "(unset, fallback to compiled angular-delay defaults)");
+            "Lab AI FB angular-delay RefineNet model path: %s (conv+refinenet autoencoder over [24x4] angular-delay features%s)\n",
+            (mp && mp[0] != '\0') ? mp : "(unset, fallback to compiled angular-delay defaults)",
+            get_softmodem_params()->ai_fb_impl_mode == 6 ? ", legacy RI/CQI carried beside latent" : "");
     }
   }
 
@@ -414,4 +418,3 @@ void set_softmodem_sighandler(void) {
   signal(SIGABRT, signal_handler);
   #endif
 }
-

@@ -766,7 +766,7 @@ static bool nr_ai_fb_encode_dominant_v(const NR_DL_FRAME_PARMS *fp,
                                        uint8_t out_payload[NFAPI_NR_AI_CSI_FB_LATENT_BYTES])
 {
   const ai_fb_impl_mode_t impl_mode = (ai_fb_impl_mode_t)get_softmodem_params()->ai_fb_impl_mode;
-  if (impl_mode == AI_FB_IMPL_ANGULAR_DELAY_MLP || impl_mode == AI_FB_IMPL_ANGULAR_DELAY_REFINENET) {
+  if (ai_fb_impl_is_angular_delay(impl_mode)) {
     static float last_valid_feat[AI_FB_AD_IN] = {0};
     static bool last_valid_feat_ok = false;
     float feat[AI_FB_AD_IN];
@@ -805,7 +805,7 @@ static bool nr_ai_fb_encode_dominant_v(const NR_DL_FRAME_PARMS *fp,
             feat[4],
             feat[5]);
     }
-    if (impl_mode == AI_FB_IMPL_ANGULAR_DELAY_REFINENET)
+    if (ai_fb_impl_is_refinenet(impl_mode))
       return ai_fb_encode_angular_refinenet_features(feat, out_payload);
     return ai_fb_encode_angular_delay_features(feat, out_payload);
   }

@@ -34,6 +34,7 @@
 #include "nr_mac.h"
 #include "nr_mac_common.h"
 #include "common/utils/nr/nr_common.h"
+#include "openair2/LAYER2/NR_MAC_COMMON/ai_fb_common.h"
 #include <limits.h>
 #include <executables/softmodem-common.h>
 
@@ -4819,10 +4820,14 @@ uint16_t nr_get_csi_bitlen(nr_csi_report_t *csi_report)
                    CSI_report_bitlen->rsrp_bitlen +(CSI_report_bitlen->diff_rsrp_bitlen *
                                                     (CSI_report_bitlen->nb_ssbri_cri -1 )));
   } else {
-    /* AI CSI feedback over PUCCH: legacy CRI/RI/PMI/CQI fields replaced by a fixed 48-bit AI latent.
+    /* AI CSI feedback over PUCCH: legacy CRI/RI/PMI/CQI fields replaced by an AI payload.
      * Both UE (payload packing) and gNB (PUCCH resource sizing + decode) must see the same bitlen. */
-    if (get_softmodem_params()->ai_fb_pucch_replace)
-      return 48;
+    if (get_softmodem_params()->ai_fb_pucch_replace) {
+      const ai_fb_impl_mode_t impl_mode = (ai_fb_impl_mode_t)get_softmodem_params()->ai_fb_impl_mode;
+      const uint16_t legacy_ri_cqi_bits =
+          ai_fb_impl_uses_legacy_ri_cqi(impl_mode) ? csi_report->csi_meas_bitlen.ri_bitlen + NR_AI_CSI_FB_LEGACY_CQI_BITS : 0;
+      return NR_AI_CSI_FB_LATENT_BITS + legacy_ri_cqi_bits;
+    }
     csi_meas_bitlen = &(csi_report->csi_meas_bitlen); //This might need to be moodif for Aperiodic CSI-RS measurements
     uint16_t temp_bitlen;
     for (int i = 0; i < 8; i++) {

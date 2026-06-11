@@ -257,7 +257,7 @@ static bool load_model_auto(const char *path, ai_fb_model_t *m)
 
 const ai_fb_model_t *ai_fb_get_model(ai_fb_impl_mode_t mode)
 {
-  if (mode != AI_FB_IMPL_MODEL_STUB && mode != AI_FB_IMPL_ANGULAR_DELAY_MLP && mode != AI_FB_IMPL_ANGULAR_DELAY_REFINENET) {
+  if (mode != AI_FB_IMPL_MODEL_STUB && mode != AI_FB_IMPL_ANGULAR_DELAY_MLP && !ai_fb_impl_is_refinenet(mode)) {
     load_defaults(&g_model);
     g_loaded = true;
     return &g_model;
@@ -292,7 +292,7 @@ const ai_fb_model_t *ai_fb_get_model(ai_fb_impl_mode_t mode)
 bool ai_fb_model_available(ai_fb_impl_mode_t mode)
 {
   (void)ai_fb_get_model(mode);
-  if (mode != AI_FB_IMPL_MODEL_STUB && mode != AI_FB_IMPL_ANGULAR_DELAY_MLP && mode != AI_FB_IMPL_ANGULAR_DELAY_REFINENET)
+  if (mode != AI_FB_IMPL_MODEL_STUB && mode != AI_FB_IMPL_ANGULAR_DELAY_MLP && !ai_fb_impl_is_refinenet(mode))
     return true;
   if (get_softmodem_params()->ai_fb_model_backend == 1)
     return ai_fb_onnx_sessions_ready();

@@ -148,6 +148,8 @@ typedef struct {
   float dl_bler;
   /** MCS most recently scheduled for DL on this UE. */
   uint8_t dl_mcs;
+  /** Cumulative DL MAC TX bytes for this UE (mac_stats.dl.total_bytes); imscope derives throughput from deltas. */
+  uint64_t dl_total_bytes;
 } csi_report_scope_payload_t;
 
 typedef struct scopeData_s {

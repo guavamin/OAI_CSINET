@@ -606,6 +606,14 @@ static int nr_process_mac_pdu(instance_t module_idP,
           const nr_pdsch_AntennaPorts_t *ap = &RC.nrmac[module_idP]->radio_config.pdsch_AntennaPorts;
           const int n_ports = ap->N1 * ap->N2 * ap->XP;
           const ai_fb_impl_mode_t impl_mode = (ai_fb_impl_mode_t)get_softmodem_params()->ai_fb_impl_mode;
+          if (ai_fb_impl_uses_legacy_ri_cqi(impl_mode)) {
+            LOG_W(NR_MAC,
+                  "RNTI %04x [%d.%d] mode 6 requires RI/CQI beside the latent; use PUCCH replacement or bundled UL-SCH AI feedback\n",
+                  UE->rnti,
+                  frameP,
+                  slot);
+            break;
+          }
           if (n_ports == 2) {
             if (impl_mode == AI_FB_IMPL_CSINET) {
               csinet_decode2p_out_t dec2;
@@ -867,6 +875,12 @@ static int nr_process_mac_pdu(instance_t module_idP,
           }
 
           if (legacy_ok && custom_ok) {
+            const uint8_t legacy_ri = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.ri;
+            const uint8_t legacy_cqi = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.wb_cqi_1tb;
+            if (ai_fb_impl_uses_legacy_ri_cqi(impl_mode)) {
+              custom_ri = legacy_ri;
+              custom_cqi = legacy_cqi;
+            }
             sched_ctrl->legacy_pmi_x1 = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x1;
             sched_ctrl->legacy_pmi_x2 = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x2;
             sched_ctrl->custom_pmi_x1 = custom_x1;
@@ -883,8 +897,6 @@ static int nr_process_mac_pdu(instance_t module_idP,
             sched_ctrl->ai_fb_bundle_decodes++;
             const bool match = (sched_ctrl->legacy_pmi_x1 == sched_ctrl->custom_pmi_x1) &&
                                (sched_ctrl->legacy_pmi_x2 == sched_ctrl->custom_pmi_x2);
-            const uint8_t legacy_ri = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.ri;
-            const uint8_t legacy_cqi = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.wb_cqi_1tb;
             const bool ri_match = (legacy_ri == custom_ri);
             const double legacy_score = (double)legacy_cqi;
             const double dir_sim = (n_ports == 2 && custom_vhat2_valid)
